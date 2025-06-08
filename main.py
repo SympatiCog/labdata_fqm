@@ -13,7 +13,7 @@ class Config:
     # File and directory settings
     DATA_DIR = 'data'
     DEMOGRAPHICS_FILE = 'demographics.csv'
-    PARTICIPANT_ID_COLUMN = 'customID'
+    PARTICIPANT_ID_COLUMN = 'custom_ID'
     
     # UI defaults
     DEFAULT_AGE_RANGE = (0, 120)
@@ -33,6 +33,15 @@ class Config:
     # Available sex options for UI
     SEX_OPTIONS = ['Female', 'Male', 'Other', 'Unspecified']
     DEFAULT_SEX_SELECTION = ['Female', 'Male']
+    
+    # RS1 study columns for study selection
+    RS1_STUDY_COLUMNS = ['is_DS', 'is_ALG', 'is_CLG', 'is_NFB']
+    RS1_STUDY_LABELS = {'is_DS': 'DS Study', 'is_ALG': 'ALG Study', 'is_CLG': 'CLG Study', 'is_NFB': 'NFB Study'}
+    DEFAULT_STUDY_SELECTION = ['is_DS', 'is_ALG', 'is_CLG', 'is_NFB']
+    
+    # Session selection options
+    SESSION_OPTIONS = ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2']
+    DEFAULT_SESSION_SELECTION = ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2']
     
     @classmethod
     def get_demographics_table_name(cls) -> str:
@@ -167,6 +176,12 @@ def is_numeric_column(dtype_str: str) -> bool:
     """
     return 'int' in dtype_str or 'float' in dtype_str
 
+def detect_rs1_format(demographics_columns: List[str]) -> bool:
+    """
+    Detects if the demographics file is in RS1 format by checking for study columns.
+    """
+    return all(col in demographics_columns for col in Config.RS1_STUDY_COLUMNS)
+
 def validate_csv_structure(file_path: str, filename: str) -> bool:
     """
     Validates basic CSV structure and required columns.
@@ -236,8 +251,12 @@ def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table
         for chunk in chunk_iter:
             for col in numeric_cols:
                 if col in chunk.columns:
-                    col_min = chunk[col].min()
-                    col_max = chunk[col].max()
+                    # Coerce to numeric, invalid parsing will be set as NaN
+                    numeric_series = pd.to_numeric(chunk[col], errors='coerce')
+                    
+                    # Get min and max, ignoring NaN values
+                    col_min = numeric_series.min()
+                    col_max = numeric_series.max()
                     
                     if pd.notna(col_min):
                         min_vals[col] = min(min_vals[col], col_min)
@@ -255,8 +274,9 @@ def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table
         df = pd.read_csv(file_path)
         for col in numeric_cols:
             if col in df.columns:
-                min_val = df[col].min()
-                max_val = df[col].max()
+                numeric_series = pd.to_numeric(df[col], errors='coerce')
+                min_val = numeric_series.min()
+                max_val = numeric_series.max()
                 if pd.notna(min_val) and pd.notna(max_val):
                     col_key = f"{df_name}.{col}"
                     column_ranges[col_key] = (float(min_val), float(max_val))
@@ -340,7 +360,42 @@ def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_fi
     """
     if not tables_to_join:
         # If no tables are selected for joining, we can still filter the demo table
-        tables_to_join = {Config.get_demographics_table_name()}
+        tables_to_join = [Config.get_demographics_table_name()]
+    
+    # If session filtering is active, ensure we have behavioral tables to filter against
+    # Since session_num is primarily in behavioral tables, we need at least one for filtering
+    if ('sessions' in demographic_filters and demographic_filters['sessions']):
+        # Check if we only have demographics table
+        behavioral_tables_present = any(table != Config.get_demographics_table_name() for table in tables_to_join)
+        
+        if not behavioral_tables_present:
+            # We need to add some behavioral tables for session filtering to work
+            # Choose a table that's likely to have good session coverage
+            # Prefer tables like ANT, demographics, or other core behavioral measures
+            try:
+                csv_files = scan_csv_files(Config.DATA_DIR)
+                preferred_tables = ['ANT', 'demographics', 'DKEFS Trails', 'Dot Probe']
+                
+                # First try to find one of the preferred tables
+                for preferred in preferred_tables:
+                    for csv_file in csv_files:
+                        table_name = csv_file.replace('.csv', '')
+                        if (table_name == preferred and 
+                            table_name != Config.get_demographics_table_name()):
+                            tables_to_join.append(table_name)
+                            break
+                    if len(tables_to_join) > 1:  # Found a table
+                        break
+                
+                # If no preferred table found, use any behavioral table
+                if len(tables_to_join) == 1:  # Still only demographics
+                    for csv_file in csv_files:
+                        table_name = csv_file.replace('.csv', '')
+                        if table_name != Config.get_demographics_table_name():
+                            tables_to_join.append(table_name)
+                            break  # Just add one table to enable session filtering
+            except Exception:
+                pass  # If we can't find tables, proceed with demographics only
 
     # --- Build FROM and JOIN clauses ---
     base_table_path = os.path.join(Config.DATA_DIR, Config.DEMOGRAPHICS_FILE).replace('\\', '/')
@@ -375,6 +430,33 @@ def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_fi
         where_clauses.append(f"demo.sex IN ({placeholders})")
         for i, num_sex in enumerate(numeric_sex_values):
             params[f'sex_{i}'] = num_sex
+    
+    # RS1 Study Filters
+    if 'studies' in demographic_filters and demographic_filters['studies']:
+        study_conditions = []
+        for study in demographic_filters['studies']:
+            study_conditions.append(f"demo.{study} = ?")
+            params[f'study_{study}'] = 1
+        if study_conditions:
+            where_clauses.append(f"({' OR '.join(study_conditions)})")
+    
+    # Session Filters - check if any joined table has session_num column
+    if 'sessions' in demographic_filters and demographic_filters['sessions']:
+        # Build OR conditions for session filtering across all joined tables with session_num
+        session_conditions = []
+        session_placeholders = ', '.join(['?' for _ in demographic_filters['sessions']])
+        
+        for table in all_join_tables:
+            if table != Config.get_demographics_table_name():  # Skip demo table
+                table_alias = get_table_alias(table)
+                session_conditions.append(f"{table_alias}.session_num IN ({session_placeholders})")
+        
+        if session_conditions:
+            where_clauses.append(f"({' OR '.join(session_conditions)})")
+            # Add session parameters - one set for each table condition
+            for _ in session_conditions:
+                for session in demographic_filters['sessions']:
+                    params[f'session_{len(params)}'] = session
 
     # 2. Behavioral Filters
     for i, b_filter in enumerate(behavioral_filters):
@@ -437,9 +519,32 @@ def remove_behavioral_filter(filter_id: float) -> None:
         f for f in st.session_state.behavioral_filters if f['id'] != filter_id
     ]
 
-def render_demographic_filters(demographics_columns: List[str]) -> Tuple[Optional[Tuple[int, int]], List[str]]:
+def render_demographic_filters(demographics_columns: List[str]) -> Tuple[Optional[Tuple[int, int]], List[str], List[str], List[str]]:
     """Renders demographic filter UI and returns filter values."""
     st.subheader("Demographic Filters")
+    
+    # RS1 Study Selection (if in RS1 format)
+    selected_studies = []
+    is_rs1 = detect_rs1_format(demographics_columns)
+    if is_rs1:
+        st.subheader("Study Selection")
+        cols = st.columns(len(Config.RS1_STUDY_COLUMNS))
+        for i, study_col in enumerate(Config.RS1_STUDY_COLUMNS):
+            with cols[i]:
+                if st.checkbox(Config.RS1_STUDY_LABELS[study_col], value=True, key=f"study_{study_col}"):
+                    selected_studies.append(study_col)
+        
+        # Session Selection dropdown
+        st.subheader("Session Selection")
+        selected_sessions = st.multiselect(
+            "Select Sessions",
+            options=Config.SESSION_OPTIONS,
+            default=Config.DEFAULT_SESSION_SELECTION,
+            key="session_selection"
+        )
+        st.markdown("---")
+    else:
+        selected_sessions = []
     
     age_range = None
     if 'age' in demographics_columns:
@@ -457,7 +562,7 @@ def render_demographic_filters(demographics_columns: List[str]) -> Tuple[Optiona
             Config.DEFAULT_SEX_SELECTION
         )
     
-    return age_range, selected_sex
+    return age_range, selected_sex, selected_studies, selected_sessions
 
 def render_behavioral_filters(all_filterable_tables: List[str], demographics_columns: List[str], 
                             behavioral_columns_by_table: Dict[str, List[str]], 
@@ -548,8 +653,8 @@ def render_table_selection(available_tables: List[str], behavioral_columns_by_ta
 
 def render_results_section(base_query_for_count: str, params_for_count: List[Any], 
                          tables_in_use: List[str], selected_columns_per_table: Dict[str, List[str]], 
-                         age_range: Optional[Tuple[int, int]], selected_sex: List[str], 
-                         con: duckdb.DuckDBPyConnection) -> None:
+                         age_range: Optional[Tuple[int, int]], selected_sex: List[str], selected_studies: List[str],
+                         selected_sessions: List[str], con: duckdb.DuckDBPyConnection) -> None:
     """Renders the data generation and download section."""
     st.header("3. Generate & Download Data")
     run_query_button = st.button("Generate Merged Data", type="primary", disabled=not tables_in_use)
@@ -576,6 +681,8 @@ def render_results_section(base_query_for_count: str, params_for_count: List[Any
                     'data', 
                     f"age{age_range[0]}-{age_range[1]}" if age_range else '', 
                     '_'.join(selected_sex).lower() if selected_sex else '', 
+                    '_'.join([s.replace('is_', '') for s in selected_studies]) if selected_studies else '',
+                    '_'.join(selected_sessions).lower() if selected_sessions else '',
                     '_'.join(tables_in_use)
                 ]
                 suggested_filename = '_'.join(filter(None, filename_parts)) + '.csv'
@@ -622,7 +729,7 @@ def main() -> None:
         st.header("1. Define Cohort Filters")
         
         # Demographic filters
-        age_range, selected_sex = render_demographic_filters(demographics_columns)
+        age_range, selected_sex, selected_studies, selected_sessions = render_demographic_filters(demographics_columns)
         
         st.markdown("---")
         
@@ -634,7 +741,7 @@ def main() -> None:
         )
 
         # Calculate live count
-        demographic_filters_state = {'age_range': age_range, 'sex': selected_sex}
+        demographic_filters_state = {'age_range': age_range, 'sex': selected_sex, 'studies': selected_studies, 'sessions': selected_sessions}
         active_behavioral_filters = [
             filter_config for filter_config in st.session_state.behavioral_filters 
             if filter_config['table'] and filter_config['column']
@@ -649,6 +756,7 @@ def main() -> None:
         count_query, count_params = generate_count_query(base_query_for_count, params_for_count)
 
         if count_query:
+            print(count_query, count_params)  ## DEBUG
             count_result = con.execute(count_query, count_params).fetchone()[0]
             count_placeholder.metric("Matching Participants", count_result)
         else:
@@ -663,7 +771,7 @@ def main() -> None:
     st.markdown("---")
     render_results_section(
         base_query_for_count, params_for_count, tables_in_use, 
-        selected_columns_per_table, age_range, selected_sex, con
+        selected_columns_per_table, age_range, selected_sex, selected_studies, selected_sessions, con
     )
 
 if __name__ == "__main__":
