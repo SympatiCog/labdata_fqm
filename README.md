@@ -22,6 +22,7 @@ This application enables efficient Filter, Query, and Merge operations across yo
 - **Real-time Participant Count**: See matching participant counts update as you adjust filters
 - **Intelligent Table Merging**: Adaptive merging strategy for different research data formats
 - **Flexible Column Selection**: Choose specific columns from each table for export
+- **Data Pivoting (Enwiden)**: Transform longitudinal data from long to wide format (e.g., `age_BAS1`, `age_BAS2`)
 - **Fast Performance**: Optimized data loading and query execution using DuckDB
 - **Export Functionality**: Download filtered and merged datasets as CSV files
 - **RS1 Study Support**: Built-in support for multi-study datasets with session filtering
@@ -231,10 +232,11 @@ The application displays your detected data structure at startup (cross-sectiona
    - **Smart merging** uses appropriate strategy for your data format
 
 3. **Generate & Download**:
+   - **Enwiden by session** (longitudinal data only): Pivot data to wide format with session-specific columns
    - Click "Generate Merged Data" to run the query
    - Preview the first 50 rows of results
    - Download the complete dataset as a CSV file
-   - Filename automatically reflects your filter settings
+   - Filename automatically reflects your filter settings and data format
 
 ## Configuration
 

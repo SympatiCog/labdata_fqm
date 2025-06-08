@@ -83,5 +83,6 @@ streamlit run main.py -- --primary-id-column study_id --session-column timepoint
 - `generate_base_query_logic()`: Creates FROM/JOIN/WHERE clauses with flexible merge keys
 - `generate_data_query()`: Builds full SELECT query for data export
 - `generate_count_query()`: Builds COUNT query for participant matching
+- `enwiden_longitudinal_data()`: Pivots longitudinal data from long to wide format for session-specific analysis
 
-The application uses session state to manage table selection order and dynamic behavioral filters, with real-time participant count updates as filters are applied. It automatically displays the detected merge strategy to users for transparency.
+The application uses session state to manage table selection order and dynamic behavioral filters, with real-time participant count updates as filters are applied. It automatically displays the detected merge strategy to users for transparency. For longitudinal data, users can choose to export in either long format (one row per session) or wide format (one row per participant with session-specific columns like `age_BAS1`, `age_BAS2`).

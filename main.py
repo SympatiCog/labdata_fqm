@@ -962,12 +962,88 @@ def render_table_selection(available_tables: List[str], behavioral_columns_by_ta
     
     return selected_columns_per_table
 
+def enwiden_longitudinal_data(df: pd.DataFrame, merge_keys: MergeKeys, selected_columns_per_table: Dict[str, List[str]]) -> pd.DataFrame:
+    """
+    Pivots longitudinal data so each subject has one row with session-specific columns.
+    Transforms columns like 'age' into 'age_BAS1', 'age_BAS2', etc.
+    """
+    if not merge_keys.is_longitudinal or merge_keys.session_id not in df.columns:
+        return df
+    
+    # Identify columns to pivot (exclude ID columns)
+    id_columns = {merge_keys.primary_id}
+    if merge_keys.composite_id and merge_keys.composite_id in df.columns:
+        id_columns.add(merge_keys.composite_id)
+    if merge_keys.session_id in df.columns:
+        id_columns.add(merge_keys.session_id)
+    
+    # Get all columns that should be pivoted
+    pivot_columns = [col for col in df.columns if col not in id_columns]
+    
+    # Keep static columns (those that don't vary by session) separate
+    # These are typically demographic variables that are consistent across sessions
+    static_columns = []
+    for col in pivot_columns:
+        # Check if this column has the same value across all sessions for each subject
+        if col in df.columns:
+            # Group by primary ID and check if the column values are consistent across sessions
+            grouped = df.groupby(merge_keys.primary_id)[col].nunique()
+            if (grouped <= 1).all():  # All subjects have at most 1 unique value across sessions
+                static_columns.append(col)
+    
+    # Separate static and dynamic columns
+    dynamic_columns = [col for col in pivot_columns if col not in static_columns]
+    
+    # Start with static data (one row per subject)
+    if static_columns:
+        static_df = df.groupby(merge_keys.primary_id)[static_columns].first().reset_index()
+    else:
+        static_df = df[[merge_keys.primary_id]].drop_duplicates().reset_index(drop=True)
+    
+    # Pivot dynamic columns
+    if dynamic_columns:
+        # Create pivot table for each dynamic column
+        pivoted_dfs = []
+        
+        for col in dynamic_columns:
+            pivot_df = df.pivot_table(
+                index=merge_keys.primary_id,
+                columns=merge_keys.session_id,
+                values=col,
+                aggfunc='first'  # Take first value if duplicates exist
+            )
+            
+            # Flatten column names: 'age_BAS1', 'age_BAS2', etc.
+            pivot_df.columns = [f"{col}_{session}" for session in pivot_df.columns]
+            pivot_df = pivot_df.reset_index()
+            
+            pivoted_dfs.append(pivot_df)
+        
+        # Merge all pivoted columns
+        widened_df = static_df
+        for pivot_df in pivoted_dfs:
+            widened_df = widened_df.merge(pivot_df, on=merge_keys.primary_id, how='left')
+    else:
+        widened_df = static_df
+    
+    return widened_df
+
 def render_results_section(base_query_for_count: str, params_for_count: List[Any], 
                          tables_in_use: List[str], selected_columns_per_table: Dict[str, List[str]], 
                          age_range: Optional[Tuple[int, int]], selected_sex: List[str], selected_studies: List[str],
                          selected_sessions: List[str], con: duckdb.DuckDBPyConnection, merge_keys: MergeKeys) -> None:
     """Renders the data generation and download section."""
     st.header("3. Generate & Download Data")
+    
+    # Add enwiden option for longitudinal data
+    enwiden_data = False
+    if merge_keys.is_longitudinal:
+        enwiden_data = st.checkbox(
+            "Enwiden by session", 
+            value=False,
+            help="Pivot data so each subject has one row with session-specific columns (e.g., age_BAS1, age_BAS2)"
+        )
+    
     run_query_button = st.button("Generate Merged Data", type="primary", disabled=not tables_in_use)
 
     if run_query_button:
@@ -980,11 +1056,23 @@ def render_results_section(base_query_for_count: str, params_for_count: List[Any
                 with st.spinner("🔄 Running query and merging data..."):
                     start_time = time.time()
                     result_df = con.execute(data_query, data_params).fetchdf()
+                    
+                    # Apply enwiden transformation if requested for longitudinal data
+                    if enwiden_data and merge_keys.is_longitudinal:
+                        with st.spinner("🔄 Enwidening data by session..."):
+                            result_df = enwiden_longitudinal_data(result_df, merge_keys, selected_columns_per_table)
+                    
                     end_time = time.time()
 
+                # Display results info
+                transform_info = ""
+                if enwiden_data and merge_keys.is_longitudinal:
+                    original_rows = con.execute(data_query, data_params).fetchdf().shape[0]
+                    transform_info = f" (enwidened from {original_rows} session-rows to {len(result_df)} subject-rows)"
+                
                 st.success(f"✅ Query completed in {end_time - start_time:.2f} seconds.")
                 st.subheader("Query Results")
-                st.write(f"**Total matching participants found:** {len(result_df)}")
+                st.write(f"**Total matching participants found:** {len(result_df)}{transform_info}")
                 st.dataframe(result_df.head(Config.MAX_DISPLAY_ROWS))
 
                 csv = result_df.to_csv(index=False).encode('utf-8')
@@ -994,7 +1082,8 @@ def render_results_section(base_query_for_count: str, params_for_count: List[Any
                     '_'.join(selected_sex).lower() if selected_sex else '', 
                     '_'.join([s.replace('is_', '') for s in selected_studies]) if selected_studies else '',
                     '_'.join(selected_sessions).lower() if selected_sessions else '',
-                    '_'.join(tables_in_use)
+                    '_'.join(tables_in_use),
+                    'enwidened' if enwiden_data and merge_keys.is_longitudinal else ''
                 ]
                 suggested_filename = '_'.join(filter(None, filename_parts)) + '.csv'
                 st.download_button(
