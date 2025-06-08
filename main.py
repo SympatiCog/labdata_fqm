@@ -203,6 +203,11 @@ class Config:
     SESSION_OPTIONS = ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2']
     DEFAULT_SESSION_SELECTION = ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2']
     
+    # Rockland sample1 substudy columns
+    ROCKLAND_SAMPLE1_COLUMNS = ['rockland-sample1']
+    ROCKLAND_SAMPLE1_LABELS = {'rockland-sample1': 'Rockland Sample 1'}
+    DEFAULT_ROCKLAND_SAMPLE1_SELECTION = ['rockland-sample1']
+    
     @classmethod
     def get_demographics_table_name(cls) -> str:
         return cls.DEMOGRAPHICS_FILE.replace('.csv', '')
@@ -405,6 +410,12 @@ def detect_rs1_format(demographics_columns: List[str]) -> bool:
     Detects if the demographics file is in RS1 format by checking for study columns.
     """
     return all(col in demographics_columns for col in Config.RS1_STUDY_COLUMNS)
+
+def detect_rockland_format(demographics_columns: List[str]) -> bool:
+    """
+    Detects if the demographics file contains Rockland substudy columns.
+    """
+    return any(col in demographics_columns for col in Config.ROCKLAND_SAMPLE1_COLUMNS)
 
 def get_unique_session_values(data_dir: str, merge_keys: MergeKeys) -> List[str]:
     """
@@ -737,6 +748,15 @@ def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_fi
         if study_conditions:
             where_clauses.append(f"({' OR '.join(study_conditions)})")
     
+    # Rockland Sample1 Substudy Filters
+    if 'substudies' in demographic_filters and demographic_filters['substudies']:
+        substudy_conditions = []
+        for substudy in demographic_filters['substudies']:
+            substudy_conditions.append(f"demo.\"{substudy}\" = ?")
+            params[f'substudy_{substudy}'] = 1
+        if substudy_conditions:
+            where_clauses.append(f"({' OR '.join(substudy_conditions)})")
+    
     # Session Filters - check if any joined table has session_num column
     if 'sessions' in demographic_filters and demographic_filters['sessions']:
         # Build OR conditions for session filtering across all joined tables with session_num
@@ -817,7 +837,7 @@ def remove_behavioral_filter(filter_id: float) -> None:
         f for f in st.session_state.behavioral_filters if f['id'] != filter_id
     ]
 
-def render_demographic_filters(demographics_columns: List[str], merge_keys: MergeKeys, session_values: List[str]) -> Tuple[Optional[Tuple[int, int]], List[str], List[str], List[str]]:
+def render_demographic_filters(demographics_columns: List[str], merge_keys: MergeKeys, session_values: List[str]) -> Tuple[Optional[Tuple[int, int]], List[str], List[str], List[str], List[str]]:
     """Renders demographic filter UI and returns filter values."""
     st.subheader("Demographic Filters")
     
@@ -854,6 +874,18 @@ def render_demographic_filters(demographics_columns: List[str], merge_keys: Merg
     else:
         selected_sessions = []
     
+    # Rockland Sample1 Substudy Selection (if in Rockland format)
+    selected_substudies = []
+    is_rockland = detect_rockland_format(demographics_columns)
+    if is_rockland:
+        st.subheader("Substudy Selection")
+        cols = st.columns(len(Config.ROCKLAND_SAMPLE1_COLUMNS))
+        for i, substudy_col in enumerate(Config.ROCKLAND_SAMPLE1_COLUMNS):
+            with cols[i]:
+                if st.checkbox(Config.ROCKLAND_SAMPLE1_LABELS[substudy_col], value=True, key=f"substudy_{substudy_col}"):
+                    selected_substudies.append(substudy_col)
+        st.markdown("---")
+    
     age_range = None
     if 'age' in demographics_columns:
         age_range = st.slider(
@@ -870,7 +902,7 @@ def render_demographic_filters(demographics_columns: List[str], merge_keys: Merg
             Config.DEFAULT_SEX_SELECTION
         )
     
-    return age_range, selected_sex, selected_studies, selected_sessions
+    return age_range, selected_sex, selected_studies, selected_sessions, selected_substudies
 
 def render_behavioral_filters(all_filterable_tables: List[str], demographics_columns: List[str], 
                             behavioral_columns_by_table: Dict[str, List[str]], 
@@ -1031,7 +1063,7 @@ def enwiden_longitudinal_data(df: pd.DataFrame, merge_keys: MergeKeys, selected_
 def render_results_section(base_query_for_count: str, params_for_count: List[Any], 
                          tables_in_use: List[str], selected_columns_per_table: Dict[str, List[str]], 
                          age_range: Optional[Tuple[int, int]], selected_sex: List[str], selected_studies: List[str],
-                         selected_sessions: List[str], con: duckdb.DuckDBPyConnection, merge_keys: MergeKeys) -> None:
+                         selected_sessions: List[str], selected_substudies: List[str], con: duckdb.DuckDBPyConnection, merge_keys: MergeKeys) -> None:
     """Renders the data generation and download section."""
     st.header("3. Generate & Download Data")
     
@@ -1082,6 +1114,7 @@ def render_results_section(base_query_for_count: str, params_for_count: List[Any
                     '_'.join(selected_sex).lower() if selected_sex else '', 
                     '_'.join([s.replace('is_', '') for s in selected_studies]) if selected_studies else '',
                     '_'.join(selected_sessions).lower() if selected_sessions else '',
+                    '_'.join(selected_substudies).lower() if selected_substudies else '',
                     '_'.join(tables_in_use),
                     'enwidened' if enwiden_data and merge_keys.is_longitudinal else ''
                 ]
@@ -1139,7 +1172,7 @@ def main() -> None:
         st.header("1. Define Cohort Filters")
         
         # Demographic filters
-        age_range, selected_sex, selected_studies, selected_sessions = render_demographic_filters(demographics_columns, merge_keys, session_values)
+        age_range, selected_sex, selected_studies, selected_sessions, selected_substudies = render_demographic_filters(demographics_columns, merge_keys, session_values)
         
         st.markdown("---")
         
@@ -1151,7 +1184,7 @@ def main() -> None:
         )
 
         # Calculate live count
-        demographic_filters_state = {'age_range': age_range, 'sex': selected_sex, 'studies': selected_studies, 'sessions': selected_sessions}
+        demographic_filters_state = {'age_range': age_range, 'sex': selected_sex, 'studies': selected_studies, 'sessions': selected_sessions, 'substudies': selected_substudies}
         active_behavioral_filters = [
             filter_config for filter_config in st.session_state.behavioral_filters 
             if filter_config['table'] and filter_config['column']
@@ -1181,7 +1214,7 @@ def main() -> None:
     st.markdown("---")
     render_results_section(
         base_query_for_count, params_for_count, tables_in_use, 
-        selected_columns_per_table, age_range, selected_sex, selected_studies, selected_sessions, con, merge_keys
+        selected_columns_per_table, age_range, selected_sex, selected_studies, selected_sessions, selected_substudies, con, merge_keys
     )
 
 if __name__ == "__main__":
