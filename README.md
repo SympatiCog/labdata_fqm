@@ -16,13 +16,16 @@ This application enables efficient Filter, Query, and Merge operations across yo
 
 ## Features
 
+- **Smart Data Structure Detection**: Automatically detects cross-sectional vs longitudinal data formats
+- **Flexible Column Configuration**: Works with any column naming convention via CLI parameters
 - **Interactive Data Filtering**: Apply demographic and phenotypic filters to identify participant cohorts
 - **Real-time Participant Count**: See matching participant counts update as you adjust filters
-- **Table Merging**: Join multiple CSV datasets on a common participant identifier
+- **Intelligent Table Merging**: Adaptive merging strategy for different research data formats
 - **Flexible Column Selection**: Choose specific columns from each table for export
 - **Fast Performance**: Optimized data loading and query execution using DuckDB
 - **Export Functionality**: Download filtered and merged datasets as CSV files
 - **RS1 Study Support**: Built-in support for multi-study datasets with session filtering
+- **Legacy Compatibility**: Seamless support for existing `customID`-based datasets
 - **Synthetic Data Generation**: Generate test datasets for development and training
 
 ## Getting Started
@@ -50,9 +53,9 @@ This application enables efficient Filter, Query, and Merge operations across yo
    pip install -r requirements.txt
    ```
 
-3. **Create synthetic data (optional)**
+3. **Test with synthetic data (optional)**
    
-   To test the interface without adding 'real' data you can run:
+   To explore the interface without using real data:
    ```bash
    python generate_synthetic_data.py
    streamlit run main.py -- --data-dir synthetic_data
@@ -68,12 +71,63 @@ streamlit run main.py
 streamlit run main.py -- --data-dir your_data_folder
 ```
 
+## 🚀 What's New: Flexible Data Structure Support
+
+This application now **automatically adapts to your existing data** without requiring any file modifications:
+
+- **Auto-Detection**: Instantly recognizes cross-sectional vs longitudinal data formats
+- **Universal Column Support**: Works with any column naming convention (participant_id, SubjectID, ursi, etc.)
+- **Smart Merging**: Adapts merge strategy based on your data structure
+- **Legacy Compatibility**: Existing customID-based datasets work seamlessly
+- **Zero Configuration**: Just point to your data folder and run - no setup required!
+
+**Example**: Your data uses `participant_id` and `visit`? No problem:
+```bash
+streamlit run main.py -- --primary-id-column participant_id --session-column visit
+```
+
 ## Data Setup
 
-1. Place your CSV files in the `data/` directory (or specify a custom directory)
-2. Ensure all CSV files contain a common participant identifier column (Default=`customID`, but can be configured using the flag `--participant-id-column`; see 'Available CLI Parameters', below.
-3. Include a `demographics.csv` file as the primary table for joins
-4. Optionally include `age` and `sex` columns in demographics for demographic filtering
+The application automatically adapts to your data structure - no file modifications required!
+
+### Supported Data Formats
+
+**Cross-sectional Data**: One row per participant
+```csv
+participant_id,age,sex,score
+SUB001,25,1,85
+SUB002,30,2,90
+```
+
+**Longitudinal Data**: Multiple rows per participant across sessions
+```csv
+participant_id,session,age,sex,score
+SUB001,baseline,25,1,85
+SUB001,followup,25,1,88
+SUB002,baseline,30,2,90
+SUB002,followup,30,2,92
+```
+
+**Legacy Format**: Existing `customID` datasets (fully supported)
+```csv
+customID,age,sex,score
+SUB001_baseline,25,1,85
+SUB001_followup,25,1,88
+```
+
+### Quick Setup
+
+1. **Place your CSV files** in the `data/` directory (or specify custom directory)
+2. **Include a demographics file** as the primary table (default: `demographics.csv`)
+3. **Run the application** - it will auto-detect your column structure!
+
+```bash
+# Auto-detect everything (recommended)
+streamlit run main.py
+
+# Or specify your column names explicitly
+streamlit run main.py -- --primary-id-column participant_id --session-column timepoint
+```
 
 ### Example Data Structure
 
@@ -86,12 +140,24 @@ data/
 └── ...                  # Additional data tables
 ```
 
+### Column Name Flexibility
+
+The application works with **any column naming convention**:
+
+| Research Field | Primary ID | Session | CLI Example |
+|----------------|------------|---------|-------------|
+| Psychology | `participant_id` | `session` | `--primary-id-column participant_id --session-column session` |
+| Clinical Trials | `SubjectID` | `Visit` | `--primary-id-column SubjectID --session-column Visit` |
+| Neuroscience | `ursi` | `session_num` | Default settings |
+| Epidemiology | `study_id` | `timepoint` | `--primary-id-column study_id --session-column timepoint` |
+
 ### Data Requirements
 
-- **Required**: All CSV files must have a `customID` column for participant identification
-- **Demographics table**: Must be named `demographics.csv` (or specified via CLI)
-- **Optional columns in demographics**: `age`, `sex` for demographic filtering
-- **RS1 format support**: Automatically detected if demographics contains study columns (`is_DS`, `is_ALG`, `is_CLG`, `is_NFB`)
+- **Required**: Common identifier column across all CSV files
+- **Demographics table**: Primary table for joins (configurable name)
+- **Optional**: `age`, `sex` columns in demographics for filtering
+- **Automatic detection**: Longitudinal vs cross-sectional format
+- **RS1 format support**: Auto-detected multi-study datasets
 
 ## Usage
 
@@ -107,27 +173,41 @@ jupyter lab
 
 ### Command Line Configuration
 
-The application supports runtime configuration via command line parameters. Use the double dash (`--`) separator when running with Streamlit:
+The application supports extensive runtime configuration via command line parameters. Use the double dash (`--`) separator when running with Streamlit:
 
 ```bash
+# Auto-detect column names (recommended for most users)
+streamlit run main.py
+
+# Configure for different research data formats
+streamlit run main.py -- --primary-id-column participant_id --session-column visit
+streamlit run main.py -- --primary-id-column SubjectID --session-column Session --composite-id-column participantID
+
 # Configure data directory and file settings
-streamlit run main.py -- --data-dir custom_data --demographics-file my_demo.csv
+streamlit run main.py -- --data-dir custom_data --demographics-file my_demographics.csv
 
 # Set UI defaults and performance options
-streamlit run main.py -- --max-display-rows 100 --cache-ttl-seconds 300
+streamlit run main.py -- --max-display-rows 100 --cache-ttl-seconds 300 --default-age-min 20 --default-age-max 70
 
-# Configure participant ID column and age defaults
-streamlit run main.py -- --participant-id-column ID --default-age-min 20 --default-age-max 70
-
-# View all available options
-streamlit run main.py -- --help
+# View all available options and examples
+python main.py --help
 ```
 
 #### Available CLI Parameters
 
+**Data Structure Configuration:**
+- `--primary-id-column`: Primary subject identifier column (default: 'ursi')
+  - Common names: `participant_id`, `subject_id`, `SubjectID`, `study_id`
+- `--session-column`: Session identifier for longitudinal data (default: 'session_num')
+  - Common names: `session`, `timepoint`, `visit`, `Visit`, `Session`
+- `--composite-id-column`: Generated composite ID column name (default: 'customID')
+
+**File and Directory Settings:**
 - `--data-dir`: Directory containing CSV data files (default: 'data')
-- `--demographics-file`: Demographics CSV filename (default: 'demographics.csv')  
-- `--participant-id-column`: Column name for participant ID across all tables (default: 'customID')
+- `--demographics-file`: Demographics CSV filename (default: 'demographics.csv')
+- `--participant-id-column`: Legacy parameter for backward compatibility
+
+**UI and Performance:**
 - `--max-display-rows`: Maximum rows to display in preview (default: 50)
 - `--cache-ttl-seconds`: Cache time-to-live in seconds (default: 600)
 - `--default-age-min`: Default minimum age for age filter (default: 18)
@@ -135,21 +215,26 @@ streamlit run main.py -- --help
 
 ### Using the Interface
 
+The application displays your detected data structure at startup (cross-sectional vs longitudinal) and shows any dataset preparation actions taken.
+
 1. **Define Cohort Filters**:
    - Set age range filters (if age column exists)
    - Select sex categories (if sex column exists)
-   - Select studies and sessions (for RS1 format data)
+   - Select studies and sessions (for multi-study data)
    - Add phenotypic filters on numeric columns from any table
+   - **Live participant count** updates as you adjust filters
 
 2. **Select Data for Export**:
    - Choose which tables to include in your merged dataset
    - Select specific columns from each table
    - Tables are added to the bottom of the selection list
+   - **Smart merging** uses appropriate strategy for your data format
 
 3. **Generate & Download**:
    - Click "Generate Merged Data" to run the query
    - Preview the first 50 rows of results
    - Download the complete dataset as a CSV file
+   - Filename automatically reflects your filter settings
 
 ## Configuration
 
@@ -176,11 +261,13 @@ Additional settings can be modified in the `Config` class in `main.py`:
 
 ### Key Functions
 
-- `get_table_info()`: Scans and analyzes CSV files (cached for 10 minutes)
-- `generate_base_query_logic()`: Creates SQL JOIN and WHERE clauses
+- `FlexibleMergeStrategy`: Auto-detects cross-sectional vs longitudinal data formats
+- `MergeKeys`: Encapsulates merge column information and dataset structure  
+- `get_table_info()`: Scans, analyzes, and prepares CSV files (cached for 10 minutes)
+- `generate_base_query_logic()`: Creates adaptive SQL JOIN and WHERE clauses
 - `render_*_filters()`: Modular UI components for different filter types
-- `validate_csv_structure()`: Ensures data integrity and required columns
-- `detect_rs1_format()`: Automatically detects RS1 study format
+- `validate_csv_structure()`: Ensures data integrity with flexible column requirements
+- `detect_rs1_format()`: Automatically detects multi-study format
 
 ## Performance
 

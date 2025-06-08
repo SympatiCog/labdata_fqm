@@ -7,13 +7,173 @@ import numpy as np
 import argparse
 import sys
 from typing import Dict, List, Tuple, Optional, Any, Set
+from dataclasses import dataclass
+from abc import ABC, abstractmethod
+
+# --- Merge Strategy Classes ---
+@dataclass
+class MergeKeys:
+    """Encapsulates the merge keys for a dataset."""
+    primary_id: str  # e.g., 'ursi', 'subject_id'
+    session_id: Optional[str] = None  # e.g., 'session_num'
+    composite_id: Optional[str] = None  # e.g., 'customID' (derived)
+    is_longitudinal: bool = False
+    
+    def get_merge_column(self) -> str:
+        """Returns the appropriate column for merge operations."""
+        return self.composite_id if self.is_longitudinal else self.primary_id
+
+class MergeStrategy(ABC):
+    """Abstract base class for merge strategies."""
+    
+    @abstractmethod
+    def detect_structure(self, demographics_path: str) -> MergeKeys:
+        """Detect the merge structure from demographics file."""
+        pass
+    
+    @abstractmethod
+    def prepare_datasets(self, data_dir: str, merge_keys: MergeKeys) -> bool:
+        """Prepare datasets with appropriate merge keys."""
+        pass
+
+class FlexibleMergeStrategy(MergeStrategy):
+    """Flexible merge strategy that adapts to cross-sectional or longitudinal data."""
+    
+    def __init__(self, primary_id_column: str = 'ursi', session_column: str = 'session_num', composite_id_column: str = 'customID'):
+        self.primary_id_column = primary_id_column
+        self.session_column = session_column
+        self.composite_id_column = composite_id_column
+    
+    def detect_structure(self, demographics_path: str) -> MergeKeys:
+        """Detect whether data is cross-sectional or longitudinal."""
+        try:
+            # Read just the headers to check structure
+            df_headers = pd.read_csv(demographics_path, nrows=0)
+            columns = df_headers.columns.tolist()
+            
+            # Check if we have both primary ID and session columns
+            has_primary_id = self.primary_id_column in columns
+            has_session_id = self.session_column in columns
+            has_composite_id = self.composite_id_column in columns
+            
+            if has_primary_id and has_session_id:
+                # Longitudinal format with separate columns (preferred)
+                # Use existing customID if present, otherwise will be created
+                return MergeKeys(
+                    primary_id=self.primary_id_column,
+                    session_id=self.session_column,
+                    composite_id=self.composite_id_column,
+                    is_longitudinal=True
+                )
+            elif has_primary_id:
+                # Cross-sectional format - use primary ID directly
+                return MergeKeys(
+                    primary_id=self.primary_id_column,
+                    is_longitudinal=False
+                )
+            elif has_composite_id:
+                # Legacy customID-only format (fallback)
+                return MergeKeys(
+                    primary_id=self.composite_id_column,
+                    is_longitudinal=False
+                )
+            else:
+                # Fallback - look for any ID-like column
+                id_candidates = [col for col in columns if 'id' in col.lower() or 'ursi' in col.lower()]
+                if id_candidates:
+                    return MergeKeys(
+                        primary_id=id_candidates[0],
+                        is_longitudinal=False
+                    )
+                else:
+                    raise ValueError(f"No suitable ID column found in {demographics_path}")
+                    
+        except Exception as e:
+            st.error(f"Error detecting merge structure: {e}")
+            # Fallback to customID
+            return MergeKeys(
+                primary_id='customID',
+                is_longitudinal=False
+            )
+    
+    def prepare_datasets(self, data_dir: str, merge_keys: MergeKeys) -> Tuple[bool, List[str]]:
+        """Prepare datasets with composite IDs if longitudinal."""
+        actions_taken = []
+        
+        if not merge_keys.is_longitudinal:
+            return True, actions_taken  # No preparation needed for cross-sectional
+        
+        try:
+            # For longitudinal data, ensure all CSV files have composite IDs
+            csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+            
+            for csv_file in csv_files:
+                file_path = os.path.join(data_dir, csv_file)
+                action = self._add_composite_id_if_needed(file_path, merge_keys)
+                if action:
+                    actions_taken.append(action)
+            
+            return True, actions_taken
+            
+        except Exception as e:
+            st.error(f"Error preparing longitudinal datasets: {e}")
+            return False, actions_taken
+    
+    def _add_composite_id_if_needed(self, file_path: str, merge_keys: MergeKeys) -> Optional[str]:
+        """Add composite ID column to a file if it doesn't exist or validate existing one."""
+        filename = os.path.basename(file_path)
+        
+        try:
+            df = pd.read_csv(file_path)
+            
+            # Skip if we don't have both required columns for longitudinal data
+            if (merge_keys.primary_id not in df.columns or 
+                merge_keys.session_id not in df.columns):
+                return None
+            
+            # Check if composite ID already exists
+            if merge_keys.composite_id in df.columns:
+                # Validate existing composite ID consistency
+                expected_composite = (
+                    df[merge_keys.primary_id].astype(str) + '_' + 
+                    df[merge_keys.session_id].astype(str)
+                )
+                
+                # Check if existing composite IDs match expected format
+                current_composite = df[merge_keys.composite_id].astype(str)
+                if not current_composite.equals(expected_composite):
+                    # Inconsistent composite ID - regenerate it
+                    df[merge_keys.composite_id] = expected_composite
+                    df.to_csv(file_path, index=False)
+                    return f"🔧 Fixed inconsistent customID in {filename}"
+                # else: composite ID is correct, no action needed
+                return None
+            else:
+                # Create new composite ID
+                df[merge_keys.composite_id] = (
+                    df[merge_keys.primary_id].astype(str) + '_' + 
+                    df[merge_keys.session_id].astype(str)
+                )
+                df.to_csv(file_path, index=False)
+                return f"✅ Added customID to {filename}"
+            
+        except Exception as e:
+            # Log warning but don't fail - this file might not need composite ID
+            return f"⚠️ Could not process {filename}: {str(e)}"
 
 # --- Configuration ---
 class Config:
     # File and directory settings
     DATA_DIR = 'data'
     DEMOGRAPHICS_FILE = 'demographics.csv'
-    PARTICIPANT_ID_COLUMN = 'customID'
+    PARTICIPANT_ID_COLUMN = 'customID'  # Legacy default, will be auto-detected
+    PRIMARY_ID_COLUMN = 'ursi'  # User-specified primary ID (subject identifier)
+    SESSION_COLUMN = 'session_num'  # Session identifier for longitudinal data
+    COMPOSITE_ID_COLUMN = 'customID'  # Composite ID column name for longitudinal data
+    
+    # Merge strategy instance
+    _merge_strategy: Optional['FlexibleMergeStrategy'] = None
+    _merge_keys: Optional['MergeKeys'] = None
     
     # UI defaults
     DEFAULT_AGE_RANGE = (0, 120)
@@ -48,11 +208,52 @@ class Config:
         return cls.DEMOGRAPHICS_FILE.replace('.csv', '')
     
     @classmethod
+    def get_merge_strategy(cls) -> 'FlexibleMergeStrategy':
+        """Get or create the merge strategy instance."""
+        if cls._merge_strategy is None:
+            cls._merge_strategy = FlexibleMergeStrategy(
+                primary_id_column=cls.PRIMARY_ID_COLUMN,
+                session_column=cls.SESSION_COLUMN,
+                composite_id_column=cls.COMPOSITE_ID_COLUMN
+            )
+        return cls._merge_strategy
+    
+    @classmethod
+    def get_merge_keys(cls) -> 'MergeKeys':
+        """Get or detect the merge keys for the current dataset."""
+        if cls._merge_keys is None:
+            demographics_path = os.path.join(cls.DATA_DIR, cls.DEMOGRAPHICS_FILE)
+            cls._merge_keys = cls.get_merge_strategy().detect_structure(demographics_path)
+            # Update PARTICIPANT_ID_COLUMN to match detected structure
+            cls.PARTICIPANT_ID_COLUMN = cls._merge_keys.get_merge_column()
+        return cls._merge_keys
+    
+    @classmethod
+    def refresh_merge_detection(cls) -> None:
+        """Force re-detection of merge structure."""
+        cls._merge_keys = None
+        cls._merge_strategy = None
+    
+    @classmethod
     def parse_cli_args(cls) -> None:
         """Parse command line arguments and update Config class attributes."""
         parser = argparse.ArgumentParser(
-            description='Lab Data Query and Merge Tool - Configure runtime parameters',
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter
+            description='Lab Data Query and Merge Tool - Flexible cross-sectional and longitudinal data browser',
+            epilog='''
+Examples:
+  # Auto-detect column names (default):
+  streamlit run main.py
+  
+  # Common research data formats:
+  streamlit run main.py -- --primary-id-column subject_id --session-column timepoint
+  streamlit run main.py -- --primary-id-column participant_id --session-column visit
+  streamlit run main.py -- --primary-id-column custom_ID --session-column session_num
+  streamlit run main.py -- --primary-id-column SubjectID --session-column Session
+  
+  # Custom data directory:
+  streamlit run main.py -- --data-dir newdata --primary-id-column custom_ID --session-column session_num
+            ''',
+            formatter_class=argparse.RawDescriptionHelpFormatter
         )
         
         # File and directory settings
@@ -72,7 +273,25 @@ class Config:
             '--participant-id-column', 
             type=str, 
             default=cls.PARTICIPANT_ID_COLUMN,
-            help='Column name for participant ID across all tables'
+            help='[LEGACY] Forces specific merge column, disables auto-detection. Use --primary-id-column instead.'
+        )
+        parser.add_argument(
+            '--primary-id-column', 
+            type=str, 
+            default=cls.PRIMARY_ID_COLUMN,
+            help='[RECOMMENDED] Primary subject ID column for auto-detection. Examples: ursi, subject_id, participant_id, custom_ID'
+        )
+        parser.add_argument(
+            '--session-column', 
+            type=str, 
+            default=cls.SESSION_COLUMN,
+            help='Session identifier column for longitudinal data. Common names: session_num, session, timepoint, visit'
+        )
+        parser.add_argument(
+            '--composite-id-column',
+            type=str,
+            default='customID',
+            help='Name for composite ID column (created from primary_id + session for longitudinal data)'
         )
         
         # UI defaults
@@ -122,9 +341,14 @@ class Config:
                 cls.DATA_DIR = args.data_dir
                 cls.DEMOGRAPHICS_FILE = args.demographics_file
                 cls.PARTICIPANT_ID_COLUMN = args.participant_id_column
+                cls.PRIMARY_ID_COLUMN = args.primary_id_column
+                cls.SESSION_COLUMN = args.session_column
+                cls.COMPOSITE_ID_COLUMN = args.composite_id_column
                 cls.MAX_DISPLAY_ROWS = args.max_display_rows
                 cls.CACHE_TTL_SECONDS = args.cache_ttl_seconds
                 cls.DEFAULT_AGE_SELECTION = (args.default_age_min, args.default_age_max)
+                # Force re-detection with new settings
+                cls.refresh_merge_detection()
             except SystemExit:
                 # Handle --help or invalid arguments gracefully
                 pass
@@ -182,21 +406,67 @@ def detect_rs1_format(demographics_columns: List[str]) -> bool:
     """
     return all(col in demographics_columns for col in Config.RS1_STUDY_COLUMNS)
 
-def validate_csv_structure(file_path: str, filename: str) -> bool:
+def get_unique_session_values(data_dir: str, merge_keys: MergeKeys) -> List[str]:
     """
-    Validates basic CSV structure and required columns.
+    Extract unique session values from the detected session column across all CSV files.
+    """
+    if not merge_keys.is_longitudinal or not merge_keys.session_id:
+        return []
+    
+    unique_sessions = set()
+    
+    try:
+        csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+        
+        for csv_file in csv_files:
+            file_path = os.path.join(data_dir, csv_file)
+            try:
+                # Read just the session column to get unique values
+                df = pd.read_csv(file_path, usecols=[merge_keys.session_id] if merge_keys.session_id in pd.read_csv(file_path, nrows=0).columns else None)
+                if merge_keys.session_id in df.columns:
+                    # Convert to string and remove NaN values
+                    sessions = df[merge_keys.session_id].dropna().astype(str).unique()
+                    unique_sessions.update(sessions)
+            except Exception:
+                # Skip files that don't have the session column or can't be read
+                continue
+    
+    except Exception:
+        # If we can't scan files, fall back to empty list
+        return []
+    
+    # Sort the sessions for consistent ordering
+    session_list = sorted(list(unique_sessions))
+    return session_list
+
+def validate_csv_structure(file_path: str, filename: str, merge_keys: MergeKeys) -> bool:
+    """
+    Validates basic CSV structure and required columns based on data format.
     """
     try:
-        # Check if file can be read and has the required participant ID column
+        # Check if file can be read
         df_headers = pd.read_csv(file_path, nrows=0)
+        columns = df_headers.columns.tolist()
         
-        if Config.PARTICIPANT_ID_COLUMN not in df_headers.columns:
-            st.warning(f"Warning: '{filename}' missing required column '{Config.PARTICIPANT_ID_COLUMN}'.")
-            return False
-            
-        if len(df_headers.columns) == 0:
+        if len(columns) == 0:
             st.warning(f"Warning: '{filename}' has no columns.")
             return False
+        
+        # For cross-sectional data, require primary ID
+        if not merge_keys.is_longitudinal:
+            if merge_keys.primary_id not in columns:
+                st.warning(f"Warning: '{filename}' missing required column '{merge_keys.primary_id}'.")
+                return False
+        else:
+            # For longitudinal data, we can be more flexible:
+            # - Prefer composite ID if it exists
+            # - Otherwise require primary ID (composite will be created)
+            has_composite = merge_keys.composite_id in columns
+            has_primary = merge_keys.primary_id in columns
+            
+            if not has_composite and not has_primary:
+                st.warning(f"Warning: '{filename}' missing required column '{merge_keys.primary_id}' or '{merge_keys.composite_id}'.")
+                return False
             
         return True
         
@@ -204,7 +474,7 @@ def validate_csv_structure(file_path: str, filename: str) -> bool:
         st.error(f"Error validating '{filename}': {e}")
         return False
 
-def extract_column_metadata_fast(file_path: str, table_name: str, is_demo_table: bool) -> Tuple[List[str], Dict[str, str]]:
+def extract_column_metadata_fast(file_path: str, table_name: str, is_demo_table: bool, merge_keys: MergeKeys) -> Tuple[List[str], Dict[str, str]]:
     """
     Extracts column information and data types from CSV without loading full data.
     """
@@ -212,30 +482,45 @@ def extract_column_metadata_fast(file_path: str, table_name: str, is_demo_table:
     
     # Read only first few rows for metadata
     df_sample = pd.read_csv(file_path, nrows=100)
-    columns = [col for col in df_sample.columns if col != Config.PARTICIPANT_ID_COLUMN]
+    
+    # Exclude ID columns from the available columns list
+    id_columns_to_exclude = {merge_keys.primary_id}
+    if merge_keys.session_id:
+        id_columns_to_exclude.add(merge_keys.session_id)
+    if merge_keys.composite_id and merge_keys.composite_id in df_sample.columns:
+        id_columns_to_exclude.add(merge_keys.composite_id)
+    
+    columns = [col for col in df_sample.columns if col not in id_columns_to_exclude]
     
     column_dtypes = {}
     for col in df_sample.columns:
-        if col == Config.PARTICIPANT_ID_COLUMN:
+        if col in id_columns_to_exclude:
             continue
         col_key = f"{df_name}.{col}"
         column_dtypes[col_key] = str(df_sample[col].dtype)
     
     return columns, column_dtypes
 
-def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table: bool, column_dtypes: Dict[str, str]) -> Dict[str, Tuple[float, float]]:
+def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table: bool, column_dtypes: Dict[str, str], merge_keys: MergeKeys) -> Dict[str, Tuple[float, float]]:
     """
     Calculates min/max ranges for numeric columns using chunked reading.
     """
     df_name = get_table_alias(table_name if not is_demo_table else Config.get_demographics_table_name())
     column_ranges = {}
     
+    # ID columns to exclude from numeric analysis
+    id_columns_to_exclude = {merge_keys.primary_id}
+    if merge_keys.session_id:
+        id_columns_to_exclude.add(merge_keys.session_id)
+    if merge_keys.composite_id:
+        id_columns_to_exclude.add(merge_keys.composite_id)
+    
     # Get numeric columns from dtypes
     numeric_cols = []
     for col_key, dtype_str in column_dtypes.items():
         if col_key.startswith(f"{df_name}.") and is_numeric_column(dtype_str):
             col_name = col_key.split('.', 1)[1]
-            if col_name != Config.PARTICIPANT_ID_COLUMN:
+            if col_name not in id_columns_to_exclude:
                 numeric_cols.append(col_name)
     
     if not numeric_cols:
@@ -284,12 +569,20 @@ def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table
     return column_ranges
 
 @st.cache_data(ttl=Config.CACHE_TTL_SECONDS)
-def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[List[str], List[str], Dict[str, List[str]], Dict[str, str], Dict[str, Tuple[float, float]]]:
+def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[List[str], List[str], Dict[str, List[str]], Dict[str, str], Dict[str, Tuple[float, float]], MergeKeys, List[str], List[str]]:
     """
     Scans the data directory for CSV files and returns information about them.
     - Caches the result for 10 minutes to avoid repeatedly scanning the file system.
-    - Returns tables, columns, data types, and min/max ranges for numeric columns.
+    - Returns tables, columns, data types, min/max ranges, merge keys, actions taken, and session values.
     """
+    # Detect merge strategy first
+    merge_keys = Config.get_merge_keys()
+    
+    # Prepare datasets if longitudinal
+    actions_taken = []
+    if merge_keys.is_longitudinal:
+        success, actions_taken = Config.get_merge_strategy().prepare_datasets(data_dir, merge_keys)
+    
     behavioral_tables: List[str] = []
     demographics_columns: List[str] = []
     behavioral_columns: Dict[str, List[str]] = {}
@@ -309,13 +602,13 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[Lis
 
         table_path = os.path.join(data_dir, f)
         
-        # Validate file structure first
-        if not validate_csv_structure(table_path, f):
+        # Validate file structure first  
+        if not validate_csv_structure(table_path, f, merge_keys):
             continue
             
         try:
             # Fast metadata extraction
-            current_cols, file_dtypes = extract_column_metadata_fast(table_path, table_name, is_demo_table)
+            current_cols, file_dtypes = extract_column_metadata_fast(table_path, table_name, is_demo_table, merge_keys)
             column_dtypes.update(file_dtypes)
             
             if is_demo_table:
@@ -332,7 +625,7 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[Lis
                 behavioral_columns[table_name] = current_cols
 
             # Fast range calculation
-            file_ranges = calculate_numeric_ranges_fast(table_path, table_name, is_demo_table, file_dtypes)
+            file_ranges = calculate_numeric_ranges_fast(table_path, table_name, is_demo_table, file_dtypes, merge_keys)
             column_ranges.update(file_ranges)
             
         except pd.errors.EmptyDataError:
@@ -351,9 +644,12 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[Lis
             st.error(f"Unexpected error reading '{f}': {e}")
             continue
 
-    return behavioral_tables, demographics_columns, behavioral_columns, column_dtypes, column_ranges
+    # Extract unique session values for longitudinal data
+    session_values = get_unique_session_values(data_dir, merge_keys)
+    
+    return behavioral_tables, demographics_columns, behavioral_columns, column_dtypes, column_ranges, merge_keys, actions_taken, session_values
 
-def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_filters: List[Dict[str, Any]], tables_to_join: List[str]) -> Tuple[str, List[Any]]:
+def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_filters: List[Dict[str, Any]], tables_to_join: List[str], merge_keys: MergeKeys) -> Tuple[str, List[Any]]:
     """
     Generates the common FROM, JOIN, and WHERE clauses for all queries.
     This centralized logic ensures consistency between the count and data queries.
@@ -410,9 +706,10 @@ def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_fi
         if table == Config.get_demographics_table_name(): 
             continue  # Skip joining demo to itself
         table_path = os.path.join(Config.DATA_DIR, f"{table}.csv").replace('\\', '/')
+        merge_column = merge_keys.get_merge_column()
         from_join_clause += f"""
         LEFT JOIN read_csv_auto('{table_path}') AS {table}
-        ON demo.{Config.PARTICIPANT_ID_COLUMN} = {table}.{Config.PARTICIPANT_ID_COLUMN}"""
+        ON demo.{merge_column} = {table}.{merge_column}"""
 
     # --- Build WHERE clause ---
     where_clauses: List[str] = []
@@ -486,11 +783,12 @@ def generate_data_query(base_query_logic: str, params: List[Any], selected_table
     
     return f"{select_clause} {base_query_logic}", params
 
-def generate_count_query(base_query_logic: str, params: List[Any]) -> Tuple[Optional[str], Optional[List[Any]]]:
+def generate_count_query(base_query_logic: str, params: List[Any], merge_keys: MergeKeys) -> Tuple[Optional[str], Optional[List[Any]]]:
     """Generates a query to count distinct participants."""
     if not base_query_logic:
         return None, None
-    select_clause = f"SELECT COUNT(DISTINCT demo.{Config.PARTICIPANT_ID_COLUMN})"
+    merge_column = merge_keys.get_merge_column()
+    select_clause = f"SELECT COUNT(DISTINCT demo.{merge_column})"
     return f"{select_clause} {base_query_logic}", params
 
 
@@ -519,7 +817,7 @@ def remove_behavioral_filter(filter_id: float) -> None:
         f for f in st.session_state.behavioral_filters if f['id'] != filter_id
     ]
 
-def render_demographic_filters(demographics_columns: List[str]) -> Tuple[Optional[Tuple[int, int]], List[str], List[str], List[str]]:
+def render_demographic_filters(demographics_columns: List[str], merge_keys: MergeKeys, session_values: List[str]) -> Tuple[Optional[Tuple[int, int]], List[str], List[str], List[str]]:
     """Renders demographic filter UI and returns filter values."""
     st.subheader("Demographic Filters")
     
@@ -540,6 +838,16 @@ def render_demographic_filters(demographics_columns: List[str]) -> Tuple[Optiona
             "Select Sessions",
             options=Config.SESSION_OPTIONS,
             default=Config.DEFAULT_SESSION_SELECTION,
+            key="session_selection"
+        )
+        st.markdown("---")
+    elif merge_keys.is_longitudinal and session_values:
+        # Dynamic session selection for longitudinal data
+        st.subheader("Session Selection")
+        selected_sessions = st.multiselect(
+            f"Select {merge_keys.session_id} Values",
+            options=session_values,
+            default=session_values,  # Default to all sessions
             key="session_selection"
         )
         st.markdown("---")
@@ -657,7 +965,7 @@ def render_table_selection(available_tables: List[str], behavioral_columns_by_ta
 def render_results_section(base_query_for_count: str, params_for_count: List[Any], 
                          tables_in_use: List[str], selected_columns_per_table: Dict[str, List[str]], 
                          age_range: Optional[Tuple[int, int]], selected_sex: List[str], selected_studies: List[str],
-                         selected_sessions: List[str], con: duckdb.DuckDBPyConnection) -> None:
+                         selected_sessions: List[str], con: duckdb.DuckDBPyConnection, merge_keys: MergeKeys) -> None:
     """Renders the data generation and download section."""
     st.header("3. Generate & Download Data")
     run_query_button = st.button("Generate Merged Data", type="primary", disabled=not tables_in_use)
@@ -718,7 +1026,17 @@ def main() -> None:
 
     # Initialize database and data info
     con = get_db_connection()
-    available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges = get_table_info(con, Config.DATA_DIR)
+    available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys, actions_taken, session_values = get_table_info(con, Config.DATA_DIR)
+    
+    # Display merge strategy info
+    if merge_keys.is_longitudinal:
+        st.info(f"📊 **Longitudinal data detected** - Using `{merge_keys.primary_id}` + `{merge_keys.session_id}` → `{merge_keys.composite_id}`")
+        if actions_taken:
+            with st.expander("📋 Dataset Preparation Actions", expanded=False):
+                for action in actions_taken:
+                    st.text(action)
+    else:
+        st.info(f"📊 **Cross-sectional data detected** - Using `{merge_keys.primary_id}` for merging")
 
     # Live participant count placeholder
     st.subheader("Live Participant Count")
@@ -732,7 +1050,7 @@ def main() -> None:
         st.header("1. Define Cohort Filters")
         
         # Demographic filters
-        age_range, selected_sex, selected_studies, selected_sessions = render_demographic_filters(demographics_columns)
+        age_range, selected_sex, selected_studies, selected_sessions = render_demographic_filters(demographics_columns, merge_keys, session_values)
         
         st.markdown("---")
         
@@ -754,12 +1072,12 @@ def main() -> None:
             tables_for_count.add(filter_config['table'])
 
         base_query_for_count, params_for_count = generate_base_query_logic(
-            demographic_filters_state, active_behavioral_filters, list(tables_for_count)
+            demographic_filters_state, active_behavioral_filters, list(tables_for_count), merge_keys
         )
-        count_query, count_params = generate_count_query(base_query_for_count, params_for_count)
+        count_query, count_params = generate_count_query(base_query_for_count, params_for_count, merge_keys)
 
         if count_query:
-            print(count_query, count_params)  ## DEBUG
+            # print(count_query, count_params)  ## DEBUG
             count_result = con.execute(count_query, count_params).fetchone()[0]
             count_placeholder.metric("Matching Participants", count_result)
         else:
@@ -774,7 +1092,7 @@ def main() -> None:
     st.markdown("---")
     render_results_section(
         base_query_for_count, params_for_count, tables_in_use, 
-        selected_columns_per_table, age_range, selected_sex, selected_studies, selected_sessions, con
+        selected_columns_per_table, age_range, selected_sex, selected_studies, selected_sessions, con, merge_keys
     )
 
 if __name__ == "__main__":
