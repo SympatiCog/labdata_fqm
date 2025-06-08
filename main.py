@@ -13,7 +13,7 @@ class Config:
     # File and directory settings
     DATA_DIR = 'data'
     DEMOGRAPHICS_FILE = 'demographics.csv'
-    PARTICIPANT_ID_COLUMN = 'custom_ID'
+    PARTICIPANT_ID_COLUMN = 'customID'
     
     # UI defaults
     DEFAULT_AGE_RANGE = (0, 120)
@@ -567,8 +567,8 @@ def render_demographic_filters(demographics_columns: List[str]) -> Tuple[Optiona
 def render_behavioral_filters(all_filterable_tables: List[str], demographics_columns: List[str], 
                             behavioral_columns_by_table: Dict[str, List[str]], 
                             column_dtypes: Dict[str, str], column_ranges: Dict[str, Tuple[float, float]]) -> None:
-    """Renders behavioral filter UI."""
-    st.subheader("Behavioral Filters")
+    """Renders phenotypic filter UI."""
+    st.subheader("Phenotypic Filters")
     
     for i, behavioral_filter in enumerate(st.session_state.behavioral_filters):
         with st.container():
@@ -620,7 +620,10 @@ def render_behavioral_filters(all_filterable_tables: List[str], demographics_col
             )
             st.markdown("---")
             
-    st.button("Add Behavioral Filter", on_click=add_behavioral_filter)
+    st.button("Add Phenotypic Filter", on_click=add_behavioral_filter)
+    
+    # Information box explaining phenotypic filters
+    st.info("💡 Filter by phenotypic variables, e.g. flanker accuracy > 0.75; MOCA > 25")
 
 def render_table_selection(available_tables: List[str], behavioral_columns_by_table: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """Renders table and column selection UI and returns selected columns."""
@@ -733,7 +736,7 @@ def main() -> None:
         
         st.markdown("---")
         
-        # Behavioral filters
+        # Phenotypic filters
         all_filterable_tables = [Config.get_demographics_table_name()] + available_tables
         render_behavioral_filters(
             all_filterable_tables, demographics_columns, 
