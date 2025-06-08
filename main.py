@@ -6,6 +6,8 @@ import time
 import numpy as np
 import argparse
 import sys
+import re
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Set
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -47,6 +49,10 @@ class FlexibleMergeStrategy(MergeStrategy):
     def detect_structure(self, demographics_path: str) -> MergeKeys:
         """Detect whether data is cross-sectional or longitudinal."""
         try:
+            # Check if file exists first
+            if not os.path.exists(demographics_path):
+                raise FileNotFoundError(f"Demographics file not found: {demographics_path}")
+                
             # Read just the headers to check structure
             df_headers = pd.read_csv(demographics_path, nrows=0)
             columns = df_headers.columns.tolist()
@@ -88,8 +94,15 @@ class FlexibleMergeStrategy(MergeStrategy):
                 else:
                     raise ValueError(f"No suitable ID column found in {demographics_path}")
                     
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            # Re-raise these specific errors to be handled by caller
+            raise
         except Exception as e:
-            st.error(f"Error detecting merge structure: {e}")
+            # Only show error in UI if we're in a Streamlit context
+            try:
+                st.error(f"Error detecting merge structure: {e}")
+            except:
+                pass  # Not in Streamlit context
             # Fallback to customID
             return MergeKeys(
                 primary_id='customID',
@@ -232,9 +245,19 @@ class Config:
         """Get or detect the merge keys for the current dataset."""
         if cls._merge_keys is None:
             demographics_path = os.path.join(cls.DATA_DIR, cls.DEMOGRAPHICS_FILE)
-            cls._merge_keys = cls.get_merge_strategy().detect_structure(demographics_path)
-            # Update PARTICIPANT_ID_COLUMN to match detected structure
-            cls.PARTICIPANT_ID_COLUMN = cls._merge_keys.get_merge_column()
+            try:
+                cls._merge_keys = cls.get_merge_strategy().detect_structure(demographics_path)
+                # Update PARTICIPANT_ID_COLUMN to match detected structure
+                cls.PARTICIPANT_ID_COLUMN = cls._merge_keys.get_merge_column()
+            except (FileNotFoundError, pd.errors.EmptyDataError, Exception):
+                # Handle empty data directory gracefully - provide reasonable defaults
+                cls._merge_keys = MergeKeys(
+                    primary_id=cls.PRIMARY_ID_COLUMN,
+                    session_id=cls.SESSION_COLUMN,
+                    composite_id=cls.COMPOSITE_ID_COLUMN,
+                    is_longitudinal=True  # Default to longitudinal for flexibility
+                )
+                cls.PARTICIPANT_ID_COLUMN = cls._merge_keys.get_merge_column()
         return cls._merge_keys
     
     @classmethod
@@ -370,6 +393,129 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# --- File Upload Helper Functions ---
+
+def secure_filename(filename: str) -> str:
+    """
+    Sanitize filename for security by removing path components and dangerous characters.
+    """
+    # Remove path components and keep only the basename
+    filename = os.path.basename(filename)
+    
+    # Remove or replace dangerous characters, keep alphanumeric, dots, hyphens, underscores
+    filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    
+    # Limit length to prevent filesystem issues
+    if len(filename) > 255:
+        name, ext = os.path.splitext(filename)
+        filename = name[:250] + ext
+    
+    return filename
+
+def validate_csv_file(uploaded_file, required_columns: Optional[List[str]] = None) -> Tuple[List[str], Optional[pd.DataFrame]]:
+    """
+    Validate uploaded CSV file and return any errors along with the DataFrame if valid.
+    
+    Args:
+        uploaded_file: Streamlit uploaded file object
+        required_columns: List of column names that must be present
+    
+    Returns:
+        Tuple of (list of error messages, DataFrame or None)
+    """
+    errors = []
+    
+    try:
+        # File size check (50MB limit)
+        if uploaded_file.size > 50 * 1024 * 1024:
+            errors.append("File too large (maximum 50MB)")
+        
+        # File extension check
+        if not uploaded_file.name.lower().endswith('.csv'):
+            errors.append("File must be a CSV (.csv extension)")
+        
+        # Try to read the CSV
+        df = pd.read_csv(uploaded_file)
+        
+        # Check for empty files
+        if len(df) == 0:
+            errors.append("File is empty (no data rows)")
+        
+        # Check for required columns
+        if required_columns:
+            missing_cols = set(required_columns) - set(df.columns)
+            if missing_cols:
+                errors.append(f"Missing required columns: {', '.join(missing_cols)}")
+        
+        # Check for reasonable number of columns
+        if len(df.columns) == 0:
+            errors.append("File has no columns")
+        elif len(df.columns) > 1000:
+            errors.append("File has too many columns (maximum 1000)")
+        
+        # Check for duplicate column names
+        if len(df.columns) != len(set(df.columns)):
+            duplicates = [col for col in df.columns if list(df.columns).count(col) > 1]
+            errors.append(f"Duplicate column names found: {', '.join(set(duplicates))}")
+        
+        return errors, df if not errors else None
+        
+    except pd.errors.EmptyDataError:
+        errors.append("File is empty or contains no valid CSV data")
+    except pd.errors.ParserError as e:
+        errors.append(f"Invalid CSV format: {str(e)}")
+    except UnicodeDecodeError:
+        errors.append("File encoding not supported (please use UTF-8)")
+    except Exception as e:
+        errors.append(f"Error reading file: {str(e)}")
+    
+    return errors, None
+
+def save_uploaded_files_to_data_dir(uploaded_files, data_dir: str) -> List[str]:
+    """
+    Save uploaded files to the data directory with conflict resolution.
+    
+    Args:
+        uploaded_files: List of validated uploaded file objects
+        data_dir: Target directory for saving files
+    
+    Returns:
+        List of successfully saved file paths
+    """
+    saved_files = []
+    
+    # Ensure data directory exists
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    
+    for uploaded_file in uploaded_files:
+        try:
+            # Sanitize filename
+            safe_filename = secure_filename(uploaded_file.name)
+            file_path = os.path.join(data_dir, safe_filename)
+            
+            # Handle filename conflicts by adding a number suffix
+            if os.path.exists(file_path):
+                base_name, ext = os.path.splitext(safe_filename)
+                counter = 1
+                while os.path.exists(file_path):
+                    new_name = f"{base_name}_{counter}{ext}"
+                    file_path = os.path.join(data_dir, new_name)
+                    counter += 1
+                
+                st.warning(f"File '{uploaded_file.name}' already exists, saved as '{os.path.basename(file_path)}'")
+            
+            # Save file to disk
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            saved_files.append(file_path)
+            st.success(f"✅ Saved '{uploaded_file.name}' ({uploaded_file.size:,} bytes)")
+            
+        except Exception as e:
+            st.error(f"❌ Failed to save '{uploaded_file.name}': {str(e)}")
+    
+    return saved_files
 
 # --- Helper Functions ---
 
@@ -584,12 +730,15 @@ def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table
     return column_ranges
 
 @st.cache_data(ttl=Config.CACHE_TTL_SECONDS)
-def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[List[str], List[str], Dict[str, List[str]], Dict[str, str], Dict[str, Tuple[float, float]], MergeKeys, List[str], List[str]]:
+def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[List[str], List[str], Dict[str, List[str]], Dict[str, str], Dict[str, Tuple[float, float]], MergeKeys, List[str], List[str], bool]:
     """
     Scans the data directory for CSV files and returns information about them.
     - Caches the result for 10 minutes to avoid repeatedly scanning the file system.
-    - Returns tables, columns, data types, min/max ranges, merge keys, actions taken, and session values.
+    - Returns tables, columns, data types, min/max ranges, merge keys, actions taken, session values, and empty state flag.
     """
+    # Ensure data directory exists
+    os.makedirs(data_dir, exist_ok=True)
+    
     # Detect merge strategy first
     merge_keys = Config.get_merge_keys()
     
@@ -605,8 +754,11 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[Lis
     column_ranges: Dict[str, Tuple[float, float]] = {}
 
     all_csv_files = scan_csv_files(data_dir)
-    if not all_csv_files:
-        return [], [], {}, {}, {}
+    is_empty_state = not all_csv_files
+    
+    if is_empty_state:
+        # Return empty state with default merge keys
+        return [], [], {}, {}, {}, merge_keys, [], [], True
 
     for f in all_csv_files:
         table_name = f.replace('.csv', '')
@@ -662,7 +814,7 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> Tuple[Lis
     # Extract unique session values for longitudinal data
     session_values = get_unique_session_values(data_dir, merge_keys)
     
-    return behavioral_tables, demographics_columns, behavioral_columns, column_dtypes, column_ranges, merge_keys, actions_taken, session_values
+    return behavioral_tables, demographics_columns, behavioral_columns, column_dtypes, column_ranges, merge_keys, actions_taken, session_values, False
 
 def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_filters: List[Dict[str, Any]], tables_to_join: List[str], merge_keys: MergeKeys) -> Tuple[str, List[Any]]:
     """
@@ -817,6 +969,189 @@ def generate_count_query(base_query_logic: str, params: List[Any], merge_keys: M
 
 
 # --- UI Functions ---
+
+def render_file_upload_section(is_empty_state: bool = False) -> bool:
+    """
+    Render file upload interface. 
+    
+    Args:
+        is_empty_state: Whether this is being shown in an empty state (no existing data)
+    
+    Returns:
+        bool: True if files were successfully uploaded and saved
+    """
+    if is_empty_state:
+        st.header("🚀 Welcome to Lab Data Query Tool")
+        st.markdown("""
+        **Get started by uploading your CSV data files!**
+        
+        This tool helps you merge, filter, and export laboratory research data. To begin:
+        1. Upload one or more CSV files below
+        2. Include a demographics file with participant information
+        3. Start exploring your data with filters and queries
+        """)
+    
+    st.subheader("📁 Upload CSV Files")
+    
+    # Show format requirements - only use expander in empty state to avoid nesting
+    if is_empty_state:
+        with st.expander("📋 File Format Requirements", expanded=True):
+            st.markdown("""
+            **Required File Structure:**
+            - Files must be in CSV format (.csv extension)
+            - Include at least one demographics file with participant information
+            - Recommended to have a subject ID column (e.g., `ursi`, `subject_id`, `participant_id`)
+            - For longitudinal data: include session identifier (e.g., `session_num`, `timepoint`)
+            
+            **File Limits:**
+            - Maximum file size: 50MB per file
+            - Maximum 1000 columns per file
+            - UTF-8 encoding recommended
+            
+            **Example column structures:**
+            - Cross-sectional: `ursi, age, sex, score1, score2, ...`
+            - Longitudinal: `ursi, session_num, age, sex, score1, score2, ...`
+            """)
+    else:
+        # Show requirements inline when inside another expander
+        st.markdown("""
+        **📋 File Format Requirements:**
+        - Files must be in CSV format (.csv extension)
+        - Include at least one demographics file with participant information  
+        - Recommended to have a subject ID column (e.g., `ursi`, `subject_id`, `participant_id`)
+        - For longitudinal data: include session identifier (e.g., `session_num`, `timepoint`)
+        - Maximum file size: 50MB per file, UTF-8 encoding recommended
+        """)
+    
+    # File uploader
+    uploaded_files = st.file_uploader(
+        "Choose CSV files" if not is_empty_state else "Upload your CSV data files to get started",
+        accept_multiple_files=True,
+        type=['csv'],
+        help="Select one or more CSV files. Drag and drop is supported!",
+        key="file_uploader"
+    )
+    
+    files_uploaded = False
+    
+    if uploaded_files:
+        st.write(f"**{len(uploaded_files)} file(s) selected for upload:**")
+        
+        # Validate all files first
+        all_valid = True
+        file_summaries = []
+        
+        for uploaded_file in uploaded_files:
+            with st.container():
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    # Basic file info
+                    file_size_mb = uploaded_file.size / (1024 * 1024)
+                    st.write(f"📄 **{uploaded_file.name}** ({file_size_mb:.1f} MB)")
+                
+                # Validate file
+                errors, df = validate_csv_file(uploaded_file)
+                
+                if errors:
+                    with col1:
+                        for error in errors:
+                            st.error(f"❌ {error}")
+                    all_valid = False
+                else:
+                    with col1:
+                        st.success(f"✅ Valid CSV: {len(df)} rows, {len(df.columns)} columns")
+                        
+                        # Show column preview
+                        if len(df.columns) <= 20:
+                            st.caption(f"Columns: {', '.join(df.columns)}")
+                        else:
+                            st.caption(f"Columns: {', '.join(df.columns[:15])}... (+{len(df.columns) - 15} more)")
+                    
+                    file_summaries.append({
+                        'name': uploaded_file.name,
+                        'rows': len(df),
+                        'columns': list(df.columns),
+                        'file_obj': uploaded_file,
+                        'dataframe': df
+                    })
+        
+        st.markdown("---")
+        
+        # Show overall validation summary
+        if all_valid and file_summaries:
+            st.success(f"🎉 All {len(file_summaries)} files passed validation!")
+            
+            # Show merge compatibility check
+            has_demographics = any('demographics' in f['name'].lower() for f in file_summaries)
+            has_id_columns = any(
+                any(col.lower() in ['ursi', 'subject_id', 'participant_id', 'customid'] for col in f['columns']) 
+                for f in file_summaries
+            )
+            
+            if has_demographics:
+                st.info("✅ Demographics file detected")
+            else:
+                st.warning("⚠️ No demographics file detected - consider including a demographics.csv file")
+            
+            if has_id_columns:
+                st.info("✅ Subject ID columns detected")
+            else:
+                st.warning("⚠️ No standard ID columns detected - you may need to configure column names")
+            
+            # Save button
+            if st.button("💾 Save Files to Data Directory", type="primary"):
+                with st.spinner("Saving files..."):
+                    saved_files = save_uploaded_files_to_data_dir(
+                        [f['file_obj'] for f in file_summaries],
+                        Config.DATA_DIR
+                    )
+                    
+                    if saved_files:
+                        st.success(f"🎉 Successfully saved {len(saved_files)} files!")
+                        st.info("🔄 Refreshing application to load your new data...")
+                        
+                        # Clear cache to refresh table info
+                        get_table_info.clear()
+                        files_uploaded = True
+                        
+                        # Small delay to let users see the success message
+                        time.sleep(1)
+                        st.rerun()
+        
+        elif not all_valid:
+            st.error("❌ Please fix the validation errors above before uploading")
+    
+    elif is_empty_state:
+        st.info("👆 Upload your CSV files using the file uploader above to get started!")
+    
+    return files_uploaded
+
+def render_empty_state_welcome():
+    """Render a welcome screen for users with no data."""
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem;">
+        <h2>🔬 Lab Data Query and Merge Tool</h2>
+        <p style="font-size: 1.2rem; color: #666;">
+            Upload your CSV data files to start exploring and merging research datasets
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("""
+        ### Getting Started
+        
+        This application helps you:
+        - 📊 **Merge** multiple CSV datasets
+        - 🎯 **Filter** participants by demographics and behaviors  
+        - 📈 **Query** longitudinal and cross-sectional data
+        - 📥 **Export** customized datasets
+        
+        **To begin:** Upload your CSV files using the section below.
+        """)
+
 def sync_table_order() -> None:
     """Callback to move newly selected tables to the bottom of the list."""
     current_selection: List[str] = st.session_state.multiselect_key
@@ -1146,6 +1481,18 @@ def main() -> None:
     # Parse CLI arguments first to configure the app
     Config.parse_cli_args()
     
+    # Handle empty state vs normal application flow
+    con = get_db_connection()
+    available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys, actions_taken, session_values, is_empty_state = get_table_info(con, Config.DATA_DIR)
+    
+    if is_empty_state:
+        # Show empty state interface
+        render_empty_state_welcome()
+        st.markdown("---")
+        render_file_upload_section(is_empty_state=True)
+        return  # Exit early - don't show the main interface
+    
+    # Normal application flow with data
     st.title("🔬 Lab Data Query and Merge Tool")
 
     # Initialize session state
@@ -1154,9 +1501,9 @@ def main() -> None:
     if 'behavioral_filters' not in st.session_state:
         st.session_state.behavioral_filters = []
 
-    # Initialize database and data info
-    con = get_db_connection()
-    available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys, actions_taken, session_values = get_table_info(con, Config.DATA_DIR)
+    # File upload section (for adding more data)
+    with st.expander("📁 Upload Additional Files", expanded=False):
+        render_file_upload_section(is_empty_state=False)
     
     # Display merge strategy info
     if merge_keys.is_longitudinal:
