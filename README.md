@@ -1,12 +1,16 @@
 # Lab Data Query and Merge Tool
 
-A Streamlit-based web application for laboratory research data exploration, filtering, and export. This tool allows researchers to interactively query, merge, and download CSV datasets using an intuitive interface backed by DuckDB for efficient data processing.
+A Streamlit-based web application for laboratory research data filter, query, and merge. This tool allows researchers to interactively query, merge, and download CSV datasets using an intuitive interface - similar to LORIS or RedCap - and backed by DuckDB for efficient data processing.
 
-## Who Needs This Application?
+## Who Wants/Needs This Application?
 
-You have data from multiple outcome measures stored in multiple CSV files. You'd like to be able to filter out some participants, select outcome variables from several CSVs, and then merge those data into a wide-format CSV for further analysis. You are smart enough to avoid copy/paste operations in Excel.
-
-This application enables efficient Filter, Query, and Merge operations across your data tables saved in standard CSV files with **no need to create a SQL database or stand up a SQL server process**. Just direct the application to your data folder, and then filter, query, and merge to pull your desired analytic dataset from the larger database - much as you would in LORIS or RedCap.
+* You have data stored in multiple CSV files. 
+* You'd like to be able to:
+	* filter out some participants
+	* select a subset of variables from across your CSVs
+	* merge those vriables into a wide-format CSV for further analysis. 
+* You are smart enough to avoid copy/paste operations in Excel.
+* You want the power and efficiency of SQL, but don't want to **create a SQL database / SQL server**. 
 
 **Key advantages:**
 - **No dependence on your IT department** - this lightweight application runs on your laptop
