@@ -199,6 +199,10 @@ class Config:
     RS1_STUDY_LABELS = {'is_DS': 'DS Study', 'is_ALG': 'ALG Study', 'is_CLG': 'CLG Study', 'is_NFB': 'NFB Study'}
     DEFAULT_STUDY_SELECTION = ['is_DS', 'is_ALG', 'is_CLG', 'is_NFB']
     
+    # Rockland sample1 substudy configuration
+    ROCKLAND_BASE_STUDIES = ['Discovery', 'Longitudinal_Adult', 'Longitudinal_Child', 'Neurofeedback']
+    DEFAULT_ROCKLAND_STUDIES = ['Discovery', 'Longitudinal_Adult', 'Longitudinal_Child', 'Neurofeedback']
+    
     # Session selection options
     SESSION_OPTIONS = ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2']
     DEFAULT_SESSION_SELECTION = ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2']
@@ -413,9 +417,9 @@ def detect_rs1_format(demographics_columns: List[str]) -> bool:
 
 def detect_rockland_format(demographics_columns: List[str]) -> bool:
     """
-    Detects if the demographics file contains Rockland substudy columns.
+    Detects if the demographics file is in Rockland sample1 format by checking for all_studies column.
     """
-    return any(col in demographics_columns for col in Config.ROCKLAND_SAMPLE1_COLUMNS)
+    return 'all_studies' in demographics_columns
 
 def get_unique_session_values(data_dir: str, merge_keys: MergeKeys) -> List[str]:
     """
@@ -748,12 +752,12 @@ def generate_base_query_logic(demographic_filters: Dict[str, Any], behavioral_fi
         if study_conditions:
             where_clauses.append(f"({' OR '.join(study_conditions)})")
     
-    # Rockland Sample1 Substudy Filters
+    # Rockland Sample1 Substudy Filters (string-based filtering on all_studies column)
     if 'substudies' in demographic_filters and demographic_filters['substudies']:
         substudy_conditions = []
         for substudy in demographic_filters['substudies']:
-            substudy_conditions.append(f"demo.\"{substudy}\" = ?")
-            params[f'substudy_{substudy}'] = 1
+            substudy_conditions.append(f"demo.all_studies LIKE ?")
+            params[f'substudy_{substudy}'] = f'%{substudy}%'
         if substudy_conditions:
             where_clauses.append(f"({' OR '.join(substudy_conditions)})")
     
@@ -861,7 +865,22 @@ def render_demographic_filters(demographics_columns: List[str], merge_keys: Merg
             key="session_selection"
         )
         st.markdown("---")
-    elif merge_keys.is_longitudinal and session_values:
+    
+    # Rockland Sample1 Substudy Selection (if in Rockland format)
+    selected_substudies = []
+    is_rockland = detect_rockland_format(demographics_columns)
+    if is_rockland:
+        st.subheader("Substudy Selection")
+        selected_substudies = st.multiselect(
+            "Select Base Studies",
+            options=Config.ROCKLAND_BASE_STUDIES,
+            default=Config.DEFAULT_ROCKLAND_STUDIES,
+            key="rockland_substudy_selection",
+            help="Select which base studies to include in the dataset"
+        )
+        st.markdown("---")
+    
+    if merge_keys.is_longitudinal and session_values:
         # Dynamic session selection for longitudinal data
         st.subheader("Session Selection")
         selected_sessions = st.multiselect(
@@ -874,17 +893,6 @@ def render_demographic_filters(demographics_columns: List[str], merge_keys: Merg
     else:
         selected_sessions = []
     
-    # Rockland Sample1 Substudy Selection (if in Rockland format)
-    selected_substudies = []
-    is_rockland = detect_rockland_format(demographics_columns)
-    if is_rockland:
-        st.subheader("Substudy Selection")
-        cols = st.columns(len(Config.ROCKLAND_SAMPLE1_COLUMNS))
-        for i, substudy_col in enumerate(Config.ROCKLAND_SAMPLE1_COLUMNS):
-            with cols[i]:
-                if st.checkbox(Config.ROCKLAND_SAMPLE1_LABELS[substudy_col], value=True, key=f"substudy_{substudy_col}"):
-                    selected_substudies.append(substudy_col)
-        st.markdown("---")
     
     age_range = None
     if 'age' in demographics_columns:
