@@ -1,0 +1,6 @@
+ursi,session_num,customID,age,sex,all_studies
+SUB001,BAS1,SUB001_BAS1,25,1.0,Discovery;Longitudinal_Adult
+SUB001,BAS2,SUB001_BAS2,25,1.0,Discovery;Longitudinal_Adult
+SUB002,BAS1,SUB002_BAS1,32,2.0,Neurofeedback;Discovery
+SUB002,BAS2,SUB002_BAS2,32,2.0,Neurofeedback;Discovery
+SUB003,BAS1,SUB003_BAS1,28,1.0,Longitudinal_Child;Discovery

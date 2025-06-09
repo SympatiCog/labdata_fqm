@@ -1,0 +1,48 @@
+# GitHub Dependabot configuration
+# Automatically creates pull requests to update dependencies
+
+version: 2
+updates:
+  # Monitor Python dependencies in pyproject.toml
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    reviewers:
+      - "stancolcombe"  # Replace with actual GitHub username
+    assignees:
+      - "stancolcombe"  # Replace with actual GitHub username
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # Ignore major version updates for core dependencies to avoid breaking changes
+      - dependency-name: "streamlit"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pandas"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "duckdb"
+        update-types: ["version-update:semver-major"]
+
+  # Monitor GitHub Actions workflow updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    reviewers:
+      - "stancolcombe"  # Replace with actual GitHub username
+    assignees:
+      - "stancolcombe"  # Replace with actual GitHub username
+    open-pull-requests-limit: 3

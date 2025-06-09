@@ -1,0 +1,27 @@
+# Codecov configuration
+coverage:
+  status:
+    project:
+      default:
+        target: 80%  # Target 80% overall coverage
+        threshold: 5%  # Allow 5% drop in coverage
+        if_ci_failed: error
+    patch:
+      default:
+        target: 75%  # New code should have at least 75% coverage
+        threshold: 10%  # Allow some flexibility for new code
+
+  ignore:
+    - "tests/"  # Don't count test files in coverage
+    - "**/__pycache__/"
+    - ".venv/"
+    - "build/"
+    - "dist/"
+
+comment:
+  layout: "reach, diff, flags, tree"
+  behavior: default
+  require_changes: false  # Always comment, even if no changes
+
+github_checks:
+  annotations: true
