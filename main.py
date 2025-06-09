@@ -270,7 +270,7 @@ class Config:
     def parse_cli_args(cls) -> None:
         """Parse command line arguments and update Config class attributes."""
         parser = argparse.ArgumentParser(
-            description='Lab Data Query and Merge Tool - Flexible cross-sectional and longitudinal data browser',
+            description='TBS Data Query and Merge Tool - Flexible cross-sectional and longitudinal data browser',
             epilog='''
 Examples:
   # Auto-detect column names (default):
@@ -388,7 +388,7 @@ Examples:
 
 # --- Page Setup ---
 st.set_page_config(
-    page_title="DuckDB Lab Query Tool",
+    page_title="The Basic Scientist's Data Query Tool",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -399,12 +399,22 @@ st.set_page_config(
 def secure_filename(filename: str) -> str:
     """
     Sanitize filename for security by removing path components and dangerous characters.
+    Replaces whitespace and special characters with underscores to avoid SQL syntax errors.
     """
     # Remove path components and keep only the basename
     filename = os.path.basename(filename)
     
-    # Remove or replace dangerous characters, keep alphanumeric, dots, hyphens, underscores
+    # Replace whitespace with underscores first
+    filename = re.sub(r'\s+', '_', filename)
+    
+    # Remove or replace remaining dangerous characters, keep alphanumeric, dots, hyphens, underscores
     filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    
+    # Remove multiple consecutive underscores
+    filename = re.sub(r'_+', '_', filename)
+    
+    # Remove leading/trailing underscores
+    filename = filename.strip('_')
     
     # Limit length to prevent filesystem issues
     if len(filename) > 255:
@@ -997,20 +1007,11 @@ def render_file_upload_section(is_empty_state: bool = False) -> bool:
     if is_empty_state:
         with st.expander("📋 File Format Requirements", expanded=True):
             st.markdown("""
-            **Required File Structure:**
-            - Files must be in CSV format (.csv extension)
-            - Include at least one demographics file with participant information
-            - Recommended to have a subject ID column (e.g., `ursi`, `subject_id`, `participant_id`)
-            - For longitudinal data: include session identifier (e.g., `session_num`, `timepoint`)
-            
             **File Limits:**
             - Maximum file size: 50MB per file
             - Maximum 1000 columns per file
             - UTF-8 encoding recommended
             
-            **Example column structures:**
-            - Cross-sectional: `ursi, age, sex, score1, score2, ...`
-            - Longitudinal: `ursi, session_num, age, sex, score1, score2, ...`
             """)
     else:
         # Show requirements inline when inside another expander
@@ -1131,7 +1132,7 @@ def render_empty_state_welcome():
     """Render a welcome screen for users with no data."""
     st.markdown("""
     <div style="text-align: center; padding: 2rem;">
-        <h2>🔬 Lab Data Query and Merge Tool</h2>
+        <h2>🔬 The Basic Scientist's Data Query and Merge Tool</h2>
         <p style="font-size: 1.2rem; color: #666;">
             Upload your CSV data files to start exploring and merging research datasets
         </p>
@@ -1142,15 +1143,21 @@ def render_empty_state_welcome():
     with col2:
         st.markdown("""
         ### Getting Started
-        
-        This application helps you:
-        - 📊 **Merge** multiple CSV datasets
-        - 🎯 **Filter** participants by demographics and behaviors  
-        - 📈 **Query** longitudinal and cross-sectional data
-        - 📥 **Export** customized datasets
-        
+        This screen is to help you get started by uploading your CSV files.
         **To begin:** Upload your CSV files using the section below.
-        """)
+        
+        **File Format Requirements:**
+        - Files must be in CSV format (.csv extension)
+        - Include at least one demographics file with participant information (e.g., `demographics.csv`) 
+        - Recommended to have a subject ID column (e.g., `ursi`, `subject_id`, `participant_id`)
+        - For longitudinal data: include session identifier (e.g., `session_num`, `timepoint`)
+        - Maximum file size: 50MB per file, UTF-8 encoding recommended.
+                    
+        **Example Demographics Column Structures:**
+        - Cross-sectional: `ursi, age, sex, ...`
+        - Longitudinal: `ursi, session_num, age, sex, ...`
+        - Rockland Sample1 (multi-session, multi-study): `ursi, session_num, all_studies, age, sex, ...`
+    """)
 
 def sync_table_order() -> None:
     """Callback to move newly selected tables to the bottom of the list."""
@@ -1493,7 +1500,7 @@ def main() -> None:
         return  # Exit early - don't show the main interface
     
     # Normal application flow with data
-    st.title("🔬 Lab Data Query and Merge Tool")
+    st.title("🔬 The Basic Scientist's Data Query and Merge Tool")
 
     # Initialize session state
     if 'table_order' not in st.session_state:
