@@ -1,7 +1,7 @@
 [project]
-name = "csv_bundle_fqm"
+name = "tbs_data_fqm"
 version = "0.1.0"
-description = "Simple project to filter, query, merge across CSV files."
+description = "Basic project to filter, query, merge across CSV files."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
