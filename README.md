@@ -1,4 +1,4 @@
-# Lab Data Query and Merge Tool
+# The Basic Scientist's Data Query and Merge Tool
 
 A Streamlit-based web application for laboratory research data filter, query, and merge. This tool allows researchers to interactively query, merge, and download CSV datasets using an intuitive interface - similar to LORIS or RedCap - and backed by DuckDB for efficient data processing.
 
