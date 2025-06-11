@@ -1,9 +1,0 @@
-ursi,age,sex,session_num,customID,all_studies
-1001,25,1.0,BAS1,1001_BAS1,"Discovery, Longitudinal_Adult"
-1001,25,1.0,BAS2,1001_BAS2,"Discovery, Longitudinal_Adult"
-1002,30,2.0,BAS1,1002_BAS1,"Longitudinal_Child"
-1002,30,2.0,BAS2,1002_BAS2,"Longitudinal_Child"
-1003,35,1.0,BAS1,1003_BAS1,"Discovery, Neurofeedback"
-1003,35,1.0,BAS2,1003_BAS2,"Discovery, Neurofeedback"
-1004,40,2.0,BAS1,1004_BAS1,"Longitudinal_Adult, Longitudinal_Child"
-1004,40,2.0,BAS2,1004_BAS2,"Longitudinal_Adult, Longitudinal_Child"

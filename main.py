@@ -993,30 +993,11 @@ def render_file_upload_section(is_empty_state: bool = False) -> bool:
     Returns:
         bool: True if files were successfully uploaded and saved
     """
-    if is_empty_state:
-        st.header("🚀 Welcome to Lab Data Query Tool")
-        st.markdown("""
-        **Get started by uploading your CSV data files!**
-
-        This tool helps you merge, filter, and export laboratory research data. To begin:
-        1. Upload one or more CSV files below
-        2. Include a demographics file with participant information
-        3. Start exploring your data with filters and queries
-        """)
-
-    st.subheader("📁 Upload CSV Files")
-
-    # Show format requirements - only use expander in empty state to avoid nesting
-    if is_empty_state:
-        with st.expander("📋 File Format Requirements", expanded=True):
-            st.markdown("""
-            **File Limits:**
-            - Maximum file size: 50MB per file
-            - Maximum 1000 columns per file
-            - UTF-8 encoding recommended
-
-            """)
-    else:
+    # For empty state, the header and intro text are now handled in render_empty_state_welcome()
+    # This function focuses on the actual file upload functionality
+    
+    if not is_empty_state:
+        st.subheader("📁 Upload CSV Files")
         # Show requirements inline when inside another expander
         st.markdown("""
         **📋 File Format Requirements:**
@@ -1043,96 +1024,95 @@ def render_file_upload_section(is_empty_state: bool = False) -> bool:
 
         # Validate all files first
         all_valid = True
-        file_summaries = []
+        valid_file_summaries = []
+        invalid_file_summaries = []
 
-        for uploaded_file in uploaded_files:
-            with st.container():
-                col1, col2 = st.columns([3, 1])
+        # Create a scrolling container for validation results
+        with st.container(height=300):
+            for uploaded_file in uploaded_files:
+                with st.container():
+                    col1, col2 = st.columns([3, 1])
 
-                with col1:
-                    # Basic file info
-                    file_size_mb = uploaded_file.size / (1024 * 1024)
-                    st.write(f"📄 **{uploaded_file.name}** ({file_size_mb:.1f} MB)")
-
-                # Validate file
-                errors, df = validate_csv_file(uploaded_file)
-
-                if errors:
                     with col1:
-                        for error in errors:
-                            st.error(f"❌ {error}")
-                    all_valid = False
-                else:
-                    with col1:
-                        st.success(f"✅ Valid CSV: {len(df)} rows, {len(df.columns)} columns")
+                        # Basic file info
+                        file_size_mb = uploaded_file.size / (1024 * 1024)
+                        st.write(f"📄 **{uploaded_file.name}** ({file_size_mb:.1f} MB)")
 
-                        # Show column preview
-                        if len(df.columns) <= 20:
-                            st.caption(f"Columns: {', '.join(df.columns)}")
-                        else:
-                            st.caption(f"Columns: {', '.join(df.columns[:15])}... (+{len(df.columns) - 15} more)")
+                    # Validate file
+                    errors, df = validate_csv_file(uploaded_file)
 
-                    file_summaries.append({
-                        'name': uploaded_file.name,
-                        'rows': len(df),
-                        'columns': list(df.columns),
-                        'file_obj': uploaded_file,
-                        'dataframe': df
-                    })
+                    if errors:
+                        with col1:
+                            for error in errors:
+                                st.error(f"❌ {error}")
+                        invalid_file_summaries.append({
+                            'name': uploaded_file.name,
+                            'errors': errors
+                        })
+                        all_valid = False
+                    else:
+                        with col1:
+                            st.success(f"✅ Valid CSV: {len(df)} rows, {len(df.columns)} columns")
+
+                            # Show column preview
+                            if len(df.columns) <= 20:
+                                st.caption(f"Columns: {', '.join(df.columns)}")
+                            else:
+                                st.caption(f"Columns: {', '.join(df.columns[:15])}... (+{len(df.columns) - 15} more)")
+
+                        valid_file_summaries.append({
+                            'name': uploaded_file.name,
+                            'rows': len(df),
+                            'columns': list(df.columns),
+                            'file_obj': uploaded_file,
+                            'dataframe': df
+                        })
 
         st.markdown("---")
 
         # Show overall validation summary
-        if all_valid and file_summaries:
-            st.success(f"🎉 All {len(file_summaries)} files passed validation!")
+        if all_valid and valid_file_summaries:
+            st.success(f"🎉 All {len(valid_file_summaries)} files passed validation!")
+            files_uploaded = _show_merge_compatibility_and_save_button(valid_file_summaries, "save_files_regular")
 
-            # Show merge compatibility check
-            has_demographics = any('demographics' in f['name'].lower() for f in file_summaries)
-            has_id_columns = any(
-                any(col.lower() in ['ursi', 'subject_id', 'participant_id', 'customid'] for col in f['columns'])
-                for f in file_summaries
-            )
+        elif valid_file_summaries and invalid_file_summaries:
+            # Partial validation - some files valid, some invalid
+            st.warning(f"⚠️ {len(valid_file_summaries)} files passed validation, {len(invalid_file_summaries)} files failed")
+            
+            st.info("**Valid files:**")
+            for file_summary in valid_file_summaries:
+                st.write(f"✅ {file_summary['name']}")
+            
+            st.error("**Invalid files:**")
+            for file_summary in invalid_file_summaries:
+                st.write(f"❌ {file_summary['name']}")
+            
+            # Option to continue with valid files only
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                proceed_with_partial_regular = st.button("📤 Upload Valid Files Only", type="secondary", key="upload_partial_regular")
+            
+            with col2:
+                st.info("💡 **Tip:** You can upload additional CSV files at any time")
+            
+            # Show save options if user chose to proceed with partial upload
+            if proceed_with_partial_regular or st.session_state.get("show_partial_upload_regular", False):
+                st.session_state.show_partial_upload_regular = True
+                st.markdown("---")
+                files_uploaded = _show_merge_compatibility_and_save_button(valid_file_summaries, "save_partial_files_regular", show_in_expander=False)
 
-            if has_demographics:
-                st.info("✅ Demographics file detected")
-            else:
-                st.warning("⚠️ No demographics file detected - consider including a demographics.csv file")
-
-            if has_id_columns:
-                st.info("✅ Subject ID columns detected")
-            else:
-                st.warning("⚠️ No standard ID columns detected - you may need to configure column names")
-
-            # Save button
-            if st.button("💾 Save Files to Data Directory", type="primary"):
-                with st.spinner("Saving files..."):
-                    saved_files = save_uploaded_files_to_data_dir(
-                        [f['file_obj'] for f in file_summaries],
-                        Config.DATA_DIR
-                    )
-
-                    if saved_files:
-                        st.success(f"🎉 Successfully saved {len(saved_files)} files!")
-                        st.info("🔄 Refreshing application to load your new data...")
-
-                        # Clear cache to refresh table info
-                        get_table_info.clear()
-                        files_uploaded = True
-
-                        # Small delay to let users see the success message
-                        time.sleep(1)
-                        st.rerun()
-
-        elif not all_valid:
-            st.error("❌ Please fix the validation errors above before uploading")
+        elif not valid_file_summaries:
+            st.error("❌ All files failed validation. Please fix the errors above before uploading")
 
     elif is_empty_state:
         st.info("👆 Upload your CSV files using the file uploader above to get started!")
 
     return files_uploaded
 
-def render_empty_state_welcome():
-    """Render a welcome screen for users with no data."""
+def render_empty_state_with_upload():
+    """Render a complete empty state screen with integrated file upload."""
     st.markdown("""
     <div style="text-align: center; padding: 2rem;">
         <h2>🔬 The Basic Scientist's Data Query and Merge Tool</h2>
@@ -1142,12 +1122,13 @@ def render_empty_state_welcome():
     </div>
     """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
+    # Two-column layout matching the design
+    col1, col2 = st.columns([1, 1], gap="large")
+    
+    with col1:
+        st.markdown("## Getting Started")
         st.markdown("""
-        ### Getting Started
-        This screen is to help you get started by uploading your CSV files.
-        **To begin:** Upload your CSV files using the section below.
+        This screen is to help you get started by uploading your CSV files. **To begin:** Upload your CSV files using the section below.
 
         **File Format Requirements:**
         - Files must be in CSV format (.csv extension)
@@ -1157,10 +1138,206 @@ def render_empty_state_welcome():
         - Maximum file size: 50MB per file, UTF-8 encoding recommended.
 
         **Example Demographics Column Structures:**
-        - Cross-sectional: `ursi, age, sex, ...`
-        - Longitudinal: `ursi, session_num, age, sex, ...`
-        - Rockland Sample1 (multi-session, multi-study): `ursi, session_num, all_studies, age, sex, ...`
-    """)
+        - **Cross-sectional:** `ursi, age, sex, ...`
+        - **Longitudinal:** `ursi, session_num, age, sex, ...`
+        - **Rockland Sample1** (multi-session, multi-study): `ursi, session_num, all_studies, age, sex, ...`
+        """)
+    
+    with col2:
+        st.markdown("## 📁 Upload CSV Files")
+        st.markdown("""
+        **Get started by uploading your CSV data files!**
+
+        This tool helps you merge, filter, and export laboratory research data. To begin:
+        1. Upload one or more CSV files below
+        2. Include a demographics file with participant information  
+        3. Start exploring your data with filters and queries
+        """)
+        
+        # Move file format requirements to a collapsible section
+        with st.expander("📋 File Format Requirements", expanded=False):
+            st.markdown("""
+            **File Limits:**
+            - Maximum file size: 50MB per file
+            - Maximum 1000 columns per file
+            - UTF-8 encoding recommended
+            """)
+        
+        # Integrate file upload directly in the right column
+        render_file_upload_widget()
+
+def render_file_upload_widget() -> bool:
+    """
+    Render just the file upload widget and processing logic.
+    Used in the empty state right column.
+    
+    Returns:
+        bool: True if files were successfully uploaded and saved
+    """
+    # File uploader
+    uploaded_files = st.file_uploader(
+        "Drag and drop files here\nLimit 50MB per file • CSV",
+        accept_multiple_files=True,
+        type=['csv'],
+        help="Select one or more CSV files. Drag and drop is supported!",
+        key="file_uploader_empty_state"
+    )
+
+    files_uploaded = False
+
+    if uploaded_files:
+        st.write(f"**{len(uploaded_files)} file(s) selected for upload:**")
+
+        # Validate all files first
+        all_valid = True
+        valid_file_summaries = []
+        invalid_file_summaries = []
+
+        # Create a scrolling container for validation results
+        with st.container(height=300):
+            for uploaded_file in uploaded_files:
+                with st.container():
+                    col1, col2 = st.columns([3, 1])
+
+                    with col1:
+                        # Basic file info
+                        file_size_mb = uploaded_file.size / (1024 * 1024)
+                        st.write(f"📄 **{uploaded_file.name}** ({file_size_mb:.1f} MB)")
+
+                    # Validate file
+                    errors, df = validate_csv_file(uploaded_file)
+
+                    if errors:
+                        with col1:
+                            for error in errors:
+                                st.error(f"❌ {error}")
+                        invalid_file_summaries.append({
+                            'name': uploaded_file.name,
+                            'errors': errors
+                        })
+                        all_valid = False
+                    else:
+                        with col1:
+                            st.success(f"✅ Valid CSV: {len(df)} rows, {len(df.columns)} columns")
+
+                            # Show column preview
+                            if len(df.columns) <= 20:
+                                st.caption(f"Columns: {', '.join(df.columns)}")
+                            else:
+                                st.caption(f"Columns: {', '.join(df.columns[:15])}... (+{len(df.columns) - 15} more)")
+
+                        valid_file_summaries.append({
+                            'name': uploaded_file.name,
+                            'rows': len(df),
+                            'columns': list(df.columns),
+                            'file_obj': uploaded_file,
+                            'dataframe': df
+                        })
+
+        st.markdown("---")
+
+        # Show overall validation summary
+        if all_valid and valid_file_summaries:
+            st.success(f"🎉 All {len(valid_file_summaries)} files passed validation!")
+            files_uploaded = _show_merge_compatibility_and_save_button(valid_file_summaries, "save_files_empty_state")
+
+        elif valid_file_summaries and invalid_file_summaries:
+            # Partial validation - some files valid, some invalid
+            st.warning(f"⚠️ {len(valid_file_summaries)} files passed validation, {len(invalid_file_summaries)} files failed")
+            
+            st.info("**Valid files:**")
+            for file_summary in valid_file_summaries:
+                st.write(f"✅ {file_summary['name']}")
+            
+            st.error("**Invalid files:**")
+            for file_summary in invalid_file_summaries:
+                st.write(f"❌ {file_summary['name']}")
+            
+            # Option to continue with valid files only
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                proceed_with_partial = st.button("📤 Upload Valid Files Only", type="secondary", key="upload_partial_empty_state")
+            
+            with col2:
+                st.info("💡 **Tip:** You can upload additional CSV files at any time after getting started")
+            
+            # Show save options if user chose to proceed with partial upload
+            if proceed_with_partial or st.session_state.get("show_partial_upload", False):
+                st.session_state.show_partial_upload = True
+                st.markdown("---")
+                files_uploaded = _show_merge_compatibility_and_save_button(valid_file_summaries, "save_partial_files_empty_state", show_in_expander=False)
+
+        elif not valid_file_summaries:
+            st.error("❌ All files failed validation. Please fix the errors above before uploading")
+
+    # Bottom message matching the design
+    st.markdown("---")
+    st.info("👋 Upload your CSV files using the file uploader above to get started!")
+
+    return files_uploaded
+
+def _show_merge_compatibility_and_save_button(file_summaries: list[dict], button_key: str, show_in_expander: bool = False) -> bool:
+    """
+    Helper function to show merge compatibility check and save button.
+    
+    Args:
+        file_summaries: List of valid file summary dictionaries
+        button_key: Unique key for the save button
+        show_in_expander: Whether to show content in an expander (for partial uploads)
+    
+    Returns:
+        bool: True if files were successfully saved
+    """
+    files_uploaded = False
+    
+    def show_content():
+        # Show merge compatibility check
+        has_demographics = any('demographics' in f['name'].lower() for f in file_summaries)
+        has_id_columns = any(
+            any(col.lower() in ['ursi', 'subject_id', 'participant_id', 'customid'] for col in f['columns'])
+            for f in file_summaries
+        )
+
+        if has_demographics:
+            st.info("✅ Demographics file detected")
+        else:
+            st.warning("⚠️ No demographics file detected - consider including a demographics.csv file")
+
+        if has_id_columns:
+            st.info("✅ Subject ID columns detected")
+        else:
+            st.warning("⚠️ No standard ID columns detected - you may need to configure column names")
+
+        # Save button
+        nonlocal files_uploaded
+        if st.button("💾 Save Files to Data Directory", type="primary", key=button_key):
+            with st.spinner("Saving files..."):
+                saved_files = save_uploaded_files_to_data_dir(
+                    [f['file_obj'] for f in file_summaries],
+                    Config.DATA_DIR
+                )
+
+                if saved_files:
+                    st.success(f"🎉 Successfully saved {len(saved_files)} files!")
+                    st.info("🔄 Refreshing application to load your new data...")
+
+                    # Clear cache to refresh table info
+                    get_table_info.clear()
+                    files_uploaded = True
+
+                    # Small delay to let users see the success message
+                    time.sleep(1)
+                    st.rerun()
+    
+    if show_in_expander:
+        with st.expander("📋 Upload Summary & Save", expanded=True):
+            show_content()
+    else:
+        show_content()
+    
+    return files_uploaded
 
 def sync_table_order() -> None:
     """Callback to move newly selected tables to the bottom of the list."""
@@ -1496,10 +1673,8 @@ def main() -> None:
     available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys, actions_taken, session_values, is_empty_state = get_table_info(con, Config.DATA_DIR)
 
     if is_empty_state:
-        # Show empty state interface
-        render_empty_state_welcome()
-        st.markdown("---")
-        render_file_upload_section(is_empty_state=True)
+        # Show empty state interface with integrated file upload
+        render_empty_state_with_upload()
         return  # Exit early - don't show the main interface
 
     # Normal application flow with data
