@@ -1,0 +1,13 @@
+data_dir = "data"
+demographics_file = "demographics.csv"
+primary_id_column = "ursi"
+session_column = "session_num"
+composite_id_column = "customID"
+default_age_min = 18
+default_age_max = 80
+
+[sex_mapping]
+Female = 1.0
+Male = 2.0
+Other = 3.0
+Unspecified = 0.0

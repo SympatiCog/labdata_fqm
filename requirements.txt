@@ -3,6 +3,7 @@ streamlit>=1.45.1
 duckdb>=1.3.0
 pandas>=2.3.0
 numpy>=1.24.0
+toml
 
 # Development and analysis tools
 # jupyterlab>=4.4.3
