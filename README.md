@@ -1,6 +1,22 @@
-# The Basic Scientist's Data Query and Merge Tool
+# The Basic Scientist's Basic Data Tool
 
-A Streamlit-based web application for laboratory research data filter, query, merge, and comprehensive data analysis. This tool allows researchers to interactively query, merge, download, and generate detailed profiling reports for CSV datasets using an intuitive multipage interface - similar to LORIS or RedCap - and backed by DuckDB for efficient data processing.
+A Streamlit-based web application for laboratory research data filter, query, merge, and comprehensive data profiling. This tool allows researchers to interactively query, merge, download queried datasets - similar to web-based tools like LORIS or RedCap - and backed by DuckDB for efficient data processing. You can additionally generate detailed profiling reports for CSV datasets using an intuitive multipage interface.
+
+## Who Wants/Needs This Application?
+
+* You have data stored in multiple CSV files. 
+* You'd like to be able to:
+	* select a subset of variables from across your CSVs.
+	* merge those variables into a single wide-format CSV for further analysis.
+	* possibly filter out some participants.
+* **You are smart enough to avoid error-prone copy/paste operations in Excel.**
+* You want the power and efficiency of SQL, but don't want to **create a SQL database / SQL server**. 
+
+**Key advantages:**
+- **No dependence on your IT department** - this lightweight application runs on your local laptop or desktop.
+- **Easy data updates** - to update your database, just update your CSV(s), drop them in your application's data folder, and restart the application.
+- **No database administration** - no need to negotiate with your IT department or cajole a tech-savvy colleague to update your SQL database.
+- **Familiar workflow** - works like web-based research databases you already know, but with complete local control.
 
 ## 🆕 What's New in Latest Version
 
@@ -25,22 +41,6 @@ A Streamlit-based web application for laboratory research data filter, query, me
 - **Enhanced serialization** for better caching performance
 - **Performance optimization** for large datasets with smart sampling
 - **Comprehensive error handling** with fallback statistics
-
-## Who Wants/Needs This Application?
-
-* You have data stored in multiple CSV files. 
-* You'd like to be able to:
-	* filter out some participants
-	* select a subset of variables from across your CSVs
-	* merge those vriables into a wide-format CSV for further analysis. 
-* You are smart enough to avoid copy/paste operations in Excel.
-* You want the power and efficiency of SQL, but don't want to **create a SQL database / SQL server**. 
-
-**Key advantages:**
-- **No dependence on your IT department** - this lightweight application runs on your laptop
-- **Easy data updates** - to update your database, just update your CSV(s), drop them in your application's data folder, and restart the application
-- **No database administration** - no need to negotiate with your IT department or cajole a tech-savvy colleague to update your SQL database
-- **Familiar workflow** - works like web-based research databases you already know, but with complete local control
 
 ## Features
 
@@ -201,20 +201,9 @@ data/
 └── ...                  # Additional data tables
 ```
 
-### Column Name Flexibility
-
-The application works with **any column naming convention**:
-
-| Research Field | Primary ID | Session | CLI Example |
-|----------------|------------|---------|-------------|
-| Psychology | `participant_id` | `session` | `--primary-id-column participant_id --session-column session` |
-| Clinical Trials | `SubjectID` | `Visit` | `--primary-id-column SubjectID --session-column Visit` |
-| Neuroscience | `ursi` | `session_num` | Default settings |
-| Epidemiology | `study_id` | `timepoint` | `--primary-id-column study_id --session-column timepoint` |
-
 ### Data Requirements
-
-- **Required**: Common identifier column across all CSV files
+*
+- **Required**: Common identifier column across *all* CSV files
 - **Demographics table**: Primary table for joins (configurable name)
 - **Optional**: `age`, `sex` columns in demographics for filtering
 - **Automatic detection**: Longitudinal vs cross-sectional format
@@ -453,12 +442,12 @@ For advanced users, additional settings can be modified directly in the `Config`
 **Different Research Contexts:**
 
 ```toml
-# Psychology Study
-data_dir = "psychology_data"
+# Adult Psychology Study
+data_dir = "behavioral_data"
 primary_id_column = "participant_id"
 session_column = "session"
 default_age_min = 18
-default_age_max = 65
+default_age_max = 95
 
 # Clinical Trial
 data_dir = "clinical_trial"
