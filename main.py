@@ -1449,15 +1449,22 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         cols = st.columns(len(Config.RS1_STUDY_COLUMNS))
         for i, study_col in enumerate(Config.RS1_STUDY_COLUMNS):
             with cols[i]:
-                if st.checkbox(Config.RS1_STUDY_LABELS[study_col], value=True, key=f"study_{study_col}"):
+                # Initialize session state key if it doesn't exist
+                if f"study_{study_col}" not in st.session_state:
+                    st.session_state[f"study_{study_col}"] = True
+                    
+                if st.checkbox(Config.RS1_STUDY_LABELS[study_col], key=f"study_{study_col}"):
                     selected_studies.append(study_col)
 
         # Session Selection dropdown
         st.subheader("Session Selection")
+        # Initialize session state key if it doesn't exist
+        if "session_selection" not in st.session_state:
+            st.session_state.session_selection = Config.DEFAULT_SESSION_SELECTION
+            
         selected_sessions = st.multiselect(
             "Select Sessions",
             options=Config.SESSION_OPTIONS,
-            default=Config.DEFAULT_SESSION_SELECTION,
             key="session_selection"
         )
         st.markdown("---")
@@ -1467,10 +1474,13 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
     is_rockland = detect_rockland_format(demographics_columns)
     if is_rockland:
         st.subheader("Substudy Selection")
+        # Initialize session state key if it doesn't exist
+        if "rockland_substudy_selection" not in st.session_state:
+            st.session_state.rockland_substudy_selection = Config.DEFAULT_ROCKLAND_STUDIES
+            
         selected_substudies = st.multiselect(
             "Select Base Studies",
             options=Config.ROCKLAND_BASE_STUDIES,
-            default=Config.DEFAULT_ROCKLAND_STUDIES,
             key="rockland_substudy_selection",
             help="Select which base studies to include in the dataset"
         )
@@ -1479,10 +1489,13 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
     if merge_keys.is_longitudinal and session_values:
         # Dynamic session selection for longitudinal data
         st.subheader("Session Selection")
+        # Initialize session state key if it doesn't exist
+        if "session_selection" not in st.session_state:
+            st.session_state.session_selection = session_values
+            
         selected_sessions = st.multiselect(
             f"Select {merge_keys.session_id} Values",
             options=session_values,
-            default=session_values,  # Default to all sessions
             key="session_selection"
         )
         st.markdown("---")
@@ -1492,18 +1505,26 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
 
     age_range = None
     if 'age' in demographics_columns:
+        # Initialize session state key if it doesn't exist
+        if "demographic_age_range" not in st.session_state:
+            st.session_state.demographic_age_range = Config.DEFAULT_AGE_SELECTION
+        
         age_range = st.slider(
             "Select Age Range",
             *Config.DEFAULT_AGE_RANGE,
-            Config.DEFAULT_AGE_SELECTION
+            key="demographic_age_range"
         )
 
     selected_sex = []
     if 'sex' in demographics_columns:
+        # Initialize session state key if it doesn't exist
+        if "demographic_sex_selection" not in st.session_state:
+            st.session_state.demographic_sex_selection = Config.DEFAULT_SEX_SELECTION
+            
         selected_sex = st.multiselect(
             "Select Sex",
             Config.SEX_OPTIONS,
-            Config.DEFAULT_SEX_SELECTION
+            key="demographic_sex_selection"
         )
 
     return age_range, selected_sex, selected_studies, selected_sessions, selected_substudies
@@ -1517,10 +1538,16 @@ def render_behavioral_filters(all_filterable_tables: list[str], demographics_col
     for i, behavioral_filter in enumerate(st.session_state.behavioral_filters):
         with st.container():
             st.markdown(f"**Filter {i+1}**")
+            # Get the current value from the widget or stored value
+            current_table = st.session_state.get(f"behavioral_filter_table_{behavioral_filter['id']}", behavioral_filter.get('table'))
+            table_index = None
+            if current_table in all_filterable_tables:
+                table_index = all_filterable_tables.index(current_table)
+            
             behavioral_filter['table'] = st.selectbox(
                 "Table",
                 options=all_filterable_tables,
-                index=None,
+                index=table_index,
                 key=f"behavioral_filter_table_{behavioral_filter['id']}"
             )
 
@@ -1534,10 +1561,16 @@ def render_behavioral_filters(all_filterable_tables: list[str], demographics_col
                     if is_numeric_column(column_dtypes.get(f"{df_name}.{col}", ''))
                 ]
 
+            # Get the current column value from widget or stored value
+            current_column = st.session_state.get(f"behavioral_filter_col_{behavioral_filter['id']}", behavioral_filter.get('column'))
+            column_index = None
+            if current_column in numeric_cols:
+                column_index = numeric_cols.index(current_column)
+            
             behavioral_filter['column'] = st.selectbox(
                 "Column (Numeric Only)",
                 options=numeric_cols,
-                index=None,
+                index=column_index,
                 key=f"behavioral_filter_col_{behavioral_filter['id']}"
             )
 
@@ -1573,6 +1606,12 @@ def render_table_selection(available_tables: list[str], behavioral_columns_by_ta
     """Renders table and column selection UI and returns selected columns."""
     st.header("2. Select Data for Export")
 
+    # Initialize session state keys if they don't exist
+    if 'multiselect_key' not in st.session_state:
+        st.session_state.multiselect_key = []
+    if 'table_order' not in st.session_state:
+        st.session_state.table_order = []
+        
     st.multiselect(
         "Choose tables to merge:",
         options=available_tables,
@@ -1589,10 +1628,13 @@ def render_table_selection(available_tables: list[str], behavioral_columns_by_ta
         for table in tables_in_use:
             with st.expander(f"Columns for '{table}'", expanded=True):
                 all_cols = behavioral_columns_by_table.get(table, [])
+                # Initialize session state key if it doesn't exist
+                if f"cols_{table}" not in st.session_state:
+                    st.session_state[f"cols_{table}"] = []
+                    
                 selected_columns_per_table[table] = st.multiselect(
                     f"Select columns from {table}",
                     options=all_cols,
-                    default=[],
                     key=f"cols_{table}"
                 )
 
@@ -1674,10 +1716,14 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
     # Add enwiden option for longitudinal data
     enwiden_data = False
     if merge_keys.is_longitudinal:
+        # Initialize session state key if it doesn't exist
+        if "enwiden_by_session" not in st.session_state:
+            st.session_state.enwiden_by_session = False
+            
         enwiden_data = st.checkbox(
             "Enwiden by session",
-            value=False,
-            help="Pivot data so each subject has one row with session-specific columns (e.g., age_BAS1, age_BAS2)"
+            help="Pivot data so each subject has one row with session-specific columns (e.g., age_BAS1, age_BAS2)",
+            key="enwiden_by_session"
         )
 
     run_query_button = st.button("Generate Merged Data", type="primary", disabled=not tables_in_use)

@@ -8,7 +8,7 @@ This is a Streamlit-based data browser application for laboratory research data.
 
 ## Key Architecture
 
-- **Main Application**: `main.py` - Streamlit web interface for data exploration
+- **Main Application**: `01_🔬_Data_Query.py` - Streamlit web interface for data exploration
 - **Data Storage**: `data/` directory contains CSV files with research data
 - **Flexible Merge Strategy**: Auto-detects cross-sectional (uses `ursi` or primary ID) vs longitudinal (creates `customID` from `ursi` + `session_num`)
 - **Demographics Base**: `demographics.csv` serves as the primary table for LEFT JOINs
@@ -21,16 +21,16 @@ This is a Streamlit-based data browser application for laboratory research data.
 uv sync
 
 # Run the Streamlit application (auto-detects column names)
-streamlit run main.py
+streamlit run "01_🔬_Data_Query.py"
 
 # Common column name variations:
-streamlit run main.py -- --primary-id-column subject_id --session-column timepoint
-streamlit run main.py -- --primary-id-column participant_id --session-column visit
-streamlit run main.py -- --primary-id-column SubjectID --session-column Session
-streamlit run main.py -- --primary-id-column ursi --session-column session_num --composite-id-column participantID
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column subject_id --session-column timepoint
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column participant_id --session-column visit
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column SubjectID --session-column Session
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column ursi --session-column session_num --composite-id-column participantID
 
 # Different data directory
-streamlit run main.py -- --data-dir /path/to/data --primary-id-column study_id
+streamlit run "01_🔬_Data_Query.py" -- --data-dir /path/to/data --primary-id-column study_id
 
 # Start Jupyter Lab for data analysis
 jupyter lab
@@ -66,12 +66,12 @@ The application supports extensive CLI configuration for different dataset forma
 
 ```bash
 # View all available options
-python main.py --help
+python "01_🔬_Data_Query.py" --help
 
 # Common research data naming conventions
-streamlit run main.py -- --primary-id-column participant_id --session-column visit
-streamlit run main.py -- --primary-id-column SubjectID --session-column Session --composite-id-column participantID
-streamlit run main.py -- --primary-id-column study_id --session-column timepoint --data-dir /path/to/data
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column participant_id --session-column visit
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column SubjectID --session-column Session --composite-id-column participantID
+streamlit run "01_🔬_Data_Query.py" -- --primary-id-column study_id --session-column timepoint --data-dir /path/to/data
 ```
 
 ## Core Functions
