@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+import toml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -179,6 +180,8 @@ class FlexibleMergeStrategy(MergeStrategy):
 
 # --- Configuration ---
 class Config:
+    CONFIG_FILE_PATH = "config.toml"
+
     # File and directory settings
     DATA_DIR = 'data'
     DEMOGRAPHICS_FILE = 'demographics.csv'
@@ -227,6 +230,55 @@ class Config:
     ROCKLAND_SAMPLE1_COLUMNS = ['rockland-sample1']
     ROCKLAND_SAMPLE1_LABELS = {'rockland-sample1': 'Rockland Sample 1'}
     DEFAULT_ROCKLAND_SAMPLE1_SELECTION = ['rockland-sample1']
+
+    @classmethod
+    def save_config(cls):
+        """Saves the current configuration to the TOML file."""
+        config_data = {
+            'data_dir': cls.DATA_DIR,
+            'demographics_file': cls.DEMOGRAPHICS_FILE,
+            'primary_id_column': cls.PRIMARY_ID_COLUMN,
+            'session_column': cls.SESSION_COLUMN,
+            'composite_id_column': cls.COMPOSITE_ID_COLUMN,
+            'default_age_min': cls.DEFAULT_AGE_SELECTION[0],
+            'default_age_max': cls.DEFAULT_AGE_SELECTION[1],
+            'sex_mapping': cls.SEX_MAPPING
+        }
+        try:
+            with open(cls.CONFIG_FILE_PATH, 'w') as f:
+                toml.dump(config_data, f)
+        except Exception as e:
+            st.error(f"Error saving configuration: {e}")
+
+    @classmethod
+    def load_config(cls):
+        """Loads configuration from TOML file, or creates it if it doesn't exist."""
+        try:
+            with open(cls.CONFIG_FILE_PATH, 'r') as f:
+                config_data = toml.load(f)
+
+            cls.DATA_DIR = config_data.get('data_dir', cls.DATA_DIR)
+            cls.DEMOGRAPHICS_FILE = config_data.get('demographics_file', cls.DEMOGRAPHICS_FILE)
+            cls.PRIMARY_ID_COLUMN = config_data.get('primary_id_column', cls.PRIMARY_ID_COLUMN)
+            cls.SESSION_COLUMN = config_data.get('session_column', cls.SESSION_COLUMN)
+            cls.COMPOSITE_ID_COLUMN = config_data.get('composite_id_column', cls.COMPOSITE_ID_COLUMN)
+
+            default_age_min = config_data.get('default_age_min', cls.DEFAULT_AGE_SELECTION[0])
+            default_age_max = config_data.get('default_age_max', cls.DEFAULT_AGE_SELECTION[1])
+            cls.DEFAULT_AGE_SELECTION = (default_age_min, default_age_max)
+
+            cls.SEX_MAPPING = config_data.get('sex_mapping', cls.SEX_MAPPING)
+
+            # Refresh derived configurations
+            cls.refresh_merge_detection()
+
+        except FileNotFoundError:
+            # Config file doesn't exist, create it with current defaults
+            cls.save_config()
+        except toml.TomlDecodeError as e:
+            st.error(f"Error decoding config.toml: {e}. Using default configuration.")
+        except Exception as e:
+            st.error(f"Error loading configuration: {e}. Using default configuration.")
 
     @classmethod
     def get_demographics_table_name(cls) -> str:
@@ -388,10 +440,12 @@ Examples:
                 # Handle --help or invalid arguments gracefully
                 pass
 
+# Load configuration at startup, before CLI args are parsed
+Config.load_config()
 
 # --- Page Setup ---
 st.set_page_config(
-    page_title="The Basic Scientist's Data Query Tool",
+    page_title="The Basic Scientist's Basic Data Query Tool",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -1115,7 +1169,7 @@ def render_empty_state_with_upload():
     """Render a complete empty state screen with integrated file upload."""
     st.markdown("""
     <div style="text-align: center; padding: 2rem;">
-        <h2>🔬 The Basic Scientist's Data Query and Merge Tool</h2>
+        <h2>🔬 The Basic Scientist's Basic Data Query Tool</h2>
         <p style="font-size: 1.2rem; color: #666;">
             Upload your CSV data files to start exploring and merging research datasets
         </p>
@@ -1483,7 +1537,7 @@ def render_behavioral_filters(all_filterable_tables: list[str], demographics_col
                 )
 
             st.button(
-                "Remove",
+                "Remove Filter",
                 key=f"remove_behavioral_filter_{behavioral_filter['id']}",
                 on_click=remove_behavioral_filter,
                 args=(behavioral_filter['id'],)
@@ -1665,8 +1719,56 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
 # --- Main Application ---
 def main() -> None:
     """Main application entry point."""
-    # Parse CLI arguments first to configure the app
+    # Config is loaded at class definition.
+    # CLI arguments can override TOML settings.
     Config.parse_cli_args()
+
+    # --- Sidebar for Configuration ---
+    with st.sidebar.expander("⚙️ Application Configuration", expanded=False):
+        st.subheader("File and Directory Settings")
+        new_data_dir = st.text_input("Data Directory", value=Config.DATA_DIR, help="Path to your CSV data files.")
+        new_demo_file = st.text_input("Demographics File", value=Config.DEMOGRAPHICS_FILE, help="Filename of your demographics CSV.")
+
+        st.subheader("Column Name Settings")
+        new_primary_id = st.text_input("Primary ID Column", value=Config.PRIMARY_ID_COLUMN, help="Main subject identifier column.")
+        new_session_col = st.text_input("Session Column", value=Config.SESSION_COLUMN, help="Session identifier for longitudinal data.")
+        new_composite_id = st.text_input("Composite ID Column", value=Config.COMPOSITE_ID_COLUMN, help="Column name for combined ID+Session.")
+
+        st.subheader("Default UI Settings")
+        age_min_val = Config.DEFAULT_AGE_SELECTION[0]
+        age_max_val = Config.DEFAULT_AGE_SELECTION[1]
+        new_age_min = st.number_input("Default Min Age (Filter)", value=age_min_val, min_value=0, max_value=150)
+        new_age_max = st.number_input("Default Max Age (Filter)", value=age_max_val, min_value=new_age_min, max_value=150)
+
+        st.subheader("Sex Mapping (Read-only)")
+        st.json(Config.SEX_MAPPING)
+        st.caption("Edit config.toml directly to change sex_mapping.")
+
+        if st.button("Save Configuration", key="save_app_config"):
+            should_clear_caches = False
+            if (Config.DATA_DIR != new_data_dir or
+                Config.DEMOGRAPHICS_FILE != new_demo_file or
+                Config.PRIMARY_ID_COLUMN != new_primary_id or
+                Config.SESSION_COLUMN != new_session_col or
+                Config.COMPOSITE_ID_COLUMN != new_composite_id):
+                should_clear_caches = True
+                Config.refresh_merge_detection()  # Clear cached merge keys and strategy
+
+            Config.DATA_DIR = new_data_dir
+            Config.DEMOGRAPHICS_FILE = new_demo_file
+            Config.PRIMARY_ID_COLUMN = new_primary_id
+            Config.SESSION_COLUMN = new_session_col
+            Config.COMPOSITE_ID_COLUMN = new_composite_id
+            Config.DEFAULT_AGE_SELECTION = (new_age_min, new_age_max)
+
+            Config.save_config()
+
+            if should_clear_caches:
+                get_table_info.clear()  # Clear cache for get_table_info
+
+            st.success("✅ Configuration saved! Application will reload.")
+            time.sleep(1)  # Give user time to see message
+            st.rerun()
 
     # Handle empty state vs normal application flow
     con = get_db_connection()
@@ -1678,7 +1780,7 @@ def main() -> None:
         return  # Exit early - don't show the main interface
 
     # Normal application flow with data
-    st.title("🔬 The Basic Scientist's Data Query and Merge Tool")
+    st.title("🔬 The Basic Scientist's Basic Data Query Tool")
 
     # Initialize session state
     if 'table_order' not in st.session_state:
@@ -1741,9 +1843,9 @@ def main() -> None:
         if count_query:
             # print(count_query, count_params)  ## DEBUG
             count_result = con.execute(count_query, count_params).fetchone()[0]
-            count_placeholder.metric("Matching Participants", count_result)
+            count_placeholder.metric("Matching Rows", count_result)
         else:
-            count_placeholder.metric("Matching Participants", "N/A")
+            count_placeholder.metric("Matching Rows", "N/A")
 
     with col2:
         # Table and column selection

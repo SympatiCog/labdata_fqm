@@ -2264,6 +2264,7 @@ dependencies = [
     { name = "pandas" },
     { name = "plotly" },
     { name = "streamlit" },
+    { name = "toml" },
 ]
 
 [package.optional-dependencies]
@@ -2295,6 +2296,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
     { name = "streamlit", specifier = ">=1.45.1" },
+    { name = "toml", specifier = ">=0.10.2" },
 ]
 provides-extras = ["test"]
 

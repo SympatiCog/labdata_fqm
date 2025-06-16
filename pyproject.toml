@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.3.0",
     "plotly>=6.1.2",
     "streamlit>=1.45.1",
+    "toml>=0.10.2",
 ]
 
 [project.optional-dependencies]
