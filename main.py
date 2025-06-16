@@ -28,6 +28,25 @@ class MergeKeys:
         if self.is_longitudinal:
             return self.composite_id if self.composite_id else self.primary_id
         return self.primary_id
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for serialization."""
+        return {
+            'primary_id': self.primary_id,
+            'session_id': self.session_id,
+            'composite_id': self.composite_id,
+            'is_longitudinal': self.is_longitudinal
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'MergeKeys':
+        """Create from dictionary for deserialization."""
+        return cls(
+            primary_id=data['primary_id'],
+            session_id=data.get('session_id'),
+            composite_id=data.get('composite_id'),
+            is_longitudinal=data.get('is_longitudinal', False)
+        )
 
 class MergeStrategy(ABC):
     """Abstract base class for merge strategies."""
@@ -797,11 +816,12 @@ def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table
     return column_ranges
 
 @st.cache_data(ttl=Config.CACHE_TTL_SECONDS)
-def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> tuple[list[str], list[str], dict[str, list[str]], dict[str, str], dict[str, tuple[float, float]], MergeKeys, list[str], list[str], bool]:
+def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> tuple[list[str], list[str], dict[str, list[str]], dict[str, str], dict[str, tuple[float, float]], dict, list[str], list[str], bool]:
     """
     Scans the data directory for CSV files and returns information about them.
     - Caches the result for 10 minutes to avoid repeatedly scanning the file system.
-    - Returns tables, columns, data types, min/max ranges, merge keys, actions taken, session values, and empty state flag.
+    - Returns tables, columns, data types, min/max ranges, merge keys (as dict), actions taken, session values, and empty state flag.
+    - Note: merge_keys returned as dictionary for serialization compatibility with st.cache_data.
     """
     # Ensure data directory exists
     os.makedirs(data_dir, exist_ok=True)
@@ -825,7 +845,7 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> tuple[lis
 
     if is_empty_state:
         # Return empty state with default merge keys
-        return [], [], {}, {}, {}, merge_keys, [], [], True
+        return [], [], {}, {}, {}, merge_keys.to_dict(), [], [], True
 
     for f in all_csv_files:
         table_name = f.replace('.csv', '')
@@ -881,7 +901,7 @@ def get_table_info(_conn: duckdb.DuckDBPyConnection, data_dir: str) -> tuple[lis
     # Extract unique session values for longitudinal data
     session_values = get_unique_session_values(data_dir, merge_keys)
 
-    return behavioral_tables, demographics_columns, behavioral_columns, column_dtypes, column_ranges, merge_keys, actions_taken, session_values, False
+    return behavioral_tables, demographics_columns, behavioral_columns, column_dtypes, column_ranges, merge_keys.to_dict(), actions_taken, session_values, False
 
 def generate_base_query_logic(demographic_filters: dict[str, Any], behavioral_filters: list[dict[str, Any]], tables_to_join: list[str], merge_keys: MergeKeys) -> tuple[str, list[Any]]:
     """
@@ -1680,6 +1700,9 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
 
                     end_time = time.time()
 
+                # Store result in session state for pandas profiling
+                st.session_state.result_df = result_df.copy()
+
                 # Display results info
                 transform_info = ""
                 if enwiden_data and merge_keys.is_longitudinal:
@@ -1709,6 +1732,16 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
                     suggested_filename,
                     'text/csv'
                 )
+
+                # Link to profiling page
+                if 'result_df' in st.session_state and st.session_state.result_df is not None and not st.session_state.result_df.empty:
+                    st.markdown("---")
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.info("📊 **Want detailed data analysis?** Generate comprehensive statistical reports and data quality analysis.")
+                    with col2:
+                        if st.button("📊 Data Profiling", type="secondary", use_container_width=True):
+                            st.switch_page("pages/02_📊_Data_Profiling.py")
 
             except Exception as e:
                 st.error(f"An error occurred during the database query: {e}")
@@ -1772,7 +1805,10 @@ def main() -> None:
 
     # Handle empty state vs normal application flow
     con = get_db_connection()
-    available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys, actions_taken, session_values, is_empty_state = get_table_info(con, Config.DATA_DIR)
+    available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys_dict, actions_taken, session_values, is_empty_state = get_table_info(con, Config.DATA_DIR)
+    
+    # Convert merge_keys dictionary back to MergeKeys object
+    merge_keys = MergeKeys.from_dict(merge_keys_dict)
 
     if is_empty_state:
         # Show empty state interface with integrated file upload
