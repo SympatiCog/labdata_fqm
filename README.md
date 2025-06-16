@@ -15,6 +15,12 @@ A Streamlit-based web application for laboratory research data filter, query, me
 - **Seamless data sharing** between pages via session state
 - **Improved user experience** with dedicated workflows
 
+### ⚙️ **Configuration & Management**
+- **TOML-based Configuration**: Persistent settings via `config.toml` file
+- **Interactive GUI Configuration**: Real-time settings editor in application sidebar
+- **Flexible Configuration Hierarchy**: CLI → TOML → Defaults with intelligent override
+- **Auto-save & Validation**: Configuration changes automatically saved and validated
+
 ### 🔧 **Technical Improvements**
 - **Enhanced serialization** for better caching performance
 - **Performance optimization** for large datasets with smart sampling
@@ -64,6 +70,13 @@ A Streamlit-based web application for laboratory research data filter, query, me
 - **Session State Management**: Seamless data sharing between pages
 - **Responsive Design**: Optimized for various screen sizes and data volumes
 
+### ⚙️ **Configuration & Management**
+- **TOML-based Configuration**: Persistent settings via `config.toml` file
+- **GUI Configuration Interface**: Interactive settings editor in the application sidebar
+- **Runtime CLI Override**: Command-line parameters can override TOML settings
+- **Auto-save & Reload**: Configuration changes automatically saved and applied
+- **Settings Validation**: Real-time validation of configuration parameters
+
 ### 🔧 **Research Data Support**
 - **RS1 Study Support**: Built-in support for multi-study datasets with session filtering
 - **Legacy Compatibility**: Seamless support for existing `customID`-based datasets
@@ -111,7 +124,13 @@ streamlit run main.py
 
 # Or with custom data directory
 streamlit run main.py -- --data-dir your_data_folder
+
+# Configure via TOML file (recommended for persistent settings)
+# Edit config.toml, then run:
+streamlit run main.py
 ```
+
+**💡 Tip**: For persistent configuration, use the GUI configuration interface in the application sidebar or edit `config.toml` directly. CLI parameters are best for temporary overrides.
 
 ## 🚀 What's New: Flexible Data Structure Support
 
@@ -326,19 +345,134 @@ The application displays your detected data structure at startup (cross-sectiona
 
 ## Configuration
 
-### Runtime Configuration
+The application supports multiple configuration methods with a flexible hierarchy:
 
-The application can be configured at runtime using command line parameters (see [Command Line Configuration](#command-line-configuration) above).
+### 📁 **TOML Configuration File** ✨ *Featured*
 
-### Code Configuration
+The application uses a `config.toml` file for persistent configuration that survives application restarts:
 
-Additional settings can be modified in the `Config` class in `main.py`:
+```toml
+# config.toml - Application Configuration
+data_dir = "data"
+demographics_file = "demographics.csv"
+primary_id_column = "ursi"
+session_column = "session_num"
+composite_id_column = "customID"
+default_age_min = 18
+default_age_max = 80
 
-- `SEX_MAPPING`: Mapping of sex labels to numeric codes
+[sex_mapping]
+Female = 1.0
+Male = 2.0
+Other = 3.0
+Unspecified = 0.0
+```
+
+**Configuration Parameters:**
+
+| Parameter | Description | Default | Example Values |
+|-----------|-------------|---------|----------------|
+| `data_dir` | Directory containing CSV files | `"data"` | `"my_study_data"`, `"/path/to/csvs"` |
+| `demographics_file` | Primary demographics CSV filename | `"demographics.csv"` | `"participants.csv"`, `"baseline.csv"` |
+| `primary_id_column` | Subject identifier column name | `"ursi"` | `"participant_id"`, `"SubjectID"` |
+| `session_column` | Session/timepoint column name | `"session_num"` | `"visit"`, `"timepoint"`, `"Session"` |
+| `composite_id_column` | Generated composite ID column | `"customID"` | `"participantID"`, `"unique_id"` |
+| `default_age_min` | Default minimum age filter | `18` | `0`, `21`, `65` |
+| `default_age_max` | Default maximum age filter | `80` | `25`, `100`, `120` |
+
+**Sex Mapping Configuration:**
+```toml
+[sex_mapping]
+Female = 1.0
+Male = 2.0
+Other = 3.0
+Unspecified = 0.0
+```
+
+### 🖥️ **GUI Configuration Interface** ✨ *Interactive*
+
+Access the configuration GUI through the application sidebar:
+
+#### **How to Use the GUI Configuration:**
+
+1. **Open Configuration Panel**: 
+   - Launch the application: `streamlit run main.py`
+   - Look for **"⚙️ Application Configuration"** in the sidebar
+   - Click to expand the configuration interface
+
+2. **Configure Settings Categories**:
+
+   **📁 File and Directory Settings:**
+   - **Data Directory**: Path to your CSV data files
+   - **Demographics File**: Filename of your primary demographics CSV
+
+   **🏷️ Column Name Settings:**
+   - **Primary ID Column**: Main subject identifier (e.g., `participant_id`, `ursi`)
+   - **Session Column**: Session/timepoint identifier for longitudinal data
+   - **Composite ID Column**: Name for generated composite identifiers
+
+   **🎚️ Default UI Settings:**
+   - **Default Min/Max Age**: Age filter ranges for the interface
+   - **Sex Mapping**: View current sex-to-numeric mappings (read-only in GUI)
+
+3. **Save and Apply**:
+   - Click **"Save Configuration"** to persist changes to `config.toml`
+   - Application automatically reloads with new settings
+   - Cache clearing handled automatically when needed
+
+#### **GUI Features:**
+- **Real-time Validation**: Input validation with helpful error messages
+- **Auto-save**: Changes persist across application sessions
+- **Cache Management**: Intelligent cache clearing when data structure changes
+- **Visual Feedback**: Success/error notifications for configuration changes
+- **Read-only Display**: Some advanced settings (like sex mapping) shown for reference
+
+### 💻 **Command Line Configuration**
+
+CLI parameters override both TOML and default settings (see [Command Line Configuration](#command-line-configuration) above).
+
+**Configuration Hierarchy** (highest to lowest priority):
+1. **Command Line Parameters** (temporary, session-only)
+2. **TOML Configuration File** (persistent)
+3. **Application Defaults** (built-in fallbacks)
+
+### 🔧 **Advanced Configuration**
+
+For advanced users, additional settings can be modified directly in the `Config` class in `main.py`:
+
+- `SEX_MAPPING`: Mapping of sex labels to numeric codes (also configurable via TOML)
 - `DEFAULT_AGE_RANGE`: Age slider range (default: 0-120)
 - `DEFAULT_FILTER_RANGE`: Default range for phenotypic filters (default: 0-100)
 - `SEX_OPTIONS`: Available sex options for UI selection
 - `SESSION_OPTIONS`: Available session options for filtering
+- `CACHE_TTL_SECONDS`: Cache duration for metadata (default: 600)
+- `MAX_DISPLAY_ROWS`: Maximum rows shown in data preview (default: 50)
+
+### 📋 **Configuration Examples**
+
+**Different Research Contexts:**
+
+```toml
+# Psychology Study
+data_dir = "psychology_data"
+primary_id_column = "participant_id"
+session_column = "session"
+default_age_min = 18
+default_age_max = 65
+
+# Clinical Trial
+data_dir = "clinical_trial"
+primary_id_column = "SubjectID"
+session_column = "Visit"
+demographics_file = "baseline_demographics.csv"
+
+# Pediatric Study
+data_dir = "pediatric_data"
+primary_id_column = "child_id"
+session_column = "timepoint"
+default_age_min = 5
+default_age_max = 17
+```
 
 ## Architecture
 
@@ -381,6 +515,7 @@ The application includes comprehensive error handling for:
 
 - `main.py`: Main application with data query UI and business logic
 - `pages/02_📊_Data_Profiling.py`: Dedicated pandas profiling interface
+- `config.toml`: TOML configuration file for persistent application settings
 - `generate_synthetic_data.py`: Synthetic data generation for testing
 - `requirements.txt`: Python package dependencies
 - `pyproject.toml`: Project configuration and dependencies (includes ydata-profiling)
@@ -392,6 +527,7 @@ The application includes comprehensive error handling for:
 - `streamlit>=1.45.1`: Web application framework
 - `pandas>=2.3.0`: Data manipulation and analysis
 - `duckdb>=1.3.0`: Fast in-memory SQL processing
+- `toml>=0.10.2`: TOML configuration file parsing
 
 **Data Profiling (New):**
 - `ydata-profiling>=4.0.0`: Comprehensive dataset profiling and analysis
