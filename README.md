@@ -1,6 +1,24 @@
 # The Basic Scientist's Data Query and Merge Tool
 
-A Streamlit-based web application for laboratory research data filter, query, and merge. This tool allows researchers to interactively query, merge, and download CSV datasets using an intuitive interface - similar to LORIS or RedCap - and backed by DuckDB for efficient data processing.
+A Streamlit-based web application for laboratory research data filter, query, merge, and comprehensive data analysis. This tool allows researchers to interactively query, merge, download, and generate detailed profiling reports for CSV datasets using an intuitive multipage interface - similar to LORIS or RedCap - and backed by DuckDB for efficient data processing.
+
+## 🆕 What's New in Latest Version
+
+### 📊 **Comprehensive Data Profiling**
+- **New dedicated profiling page** with ydata-profiling integration
+- **Interactive statistical reports** with visualizations and data quality analysis
+- **Multiple report modes**: Full, Minimal, and Explorative analysis options
+- **Export capabilities**: Download detailed HTML and JSON reports
+
+### 🏗️ **Multipage Interface**
+- **Organized navigation** between data query and analysis features
+- **Seamless data sharing** between pages via session state
+- **Improved user experience** with dedicated workflows
+
+### 🔧 **Technical Improvements**
+- **Enhanced serialization** for better caching performance
+- **Performance optimization** for large datasets with smart sampling
+- **Comprehensive error handling** with fallback statistics
 
 ## Who Wants/Needs This Application?
 
@@ -20,6 +38,7 @@ A Streamlit-based web application for laboratory research data filter, query, an
 
 ## Features
 
+### 🔍 **Data Query & Merging**
 - **Smart Data Structure Detection**: Automatically detects cross-sectional vs longitudinal data formats
 - **Flexible Column Configuration**: Works with any column naming convention via CLI parameters
 - **Interactive Data Filtering**: Apply demographic and phenotypic filters to identify participant cohorts
@@ -29,6 +48,23 @@ A Streamlit-based web application for laboratory research data filter, query, an
 - **Data Pivoting (Enwiden)**: Transform longitudinal data from long to wide format (e.g., `age_BAS1`, `age_BAS2`)
 - **Fast Performance**: Optimized data loading and query execution using DuckDB
 - **Export Functionality**: Download filtered and merged datasets as CSV files
+
+### 📊 **Data Profiling & Analysis** ✨ *NEW*
+- **Comprehensive Data Profiling**: Generate detailed statistical analysis reports using ydata-profiling
+- **Interactive Visualizations**: Correlation matrices, distribution plots, missing values heatmaps
+- **Multiple Report Types**: Full, Minimal, and Explorative profiling modes
+- **Performance Optimized**: Smart sampling for large datasets (>5000 rows)
+- **Export Reports**: Download detailed HTML and JSON profiling reports
+- **Standalone Analysis**: Upload CSV files directly for profiling without main query
+- **Data Quality Assessment**: Identify missing values, outliers, and data type issues
+- **Statistical Summaries**: Descriptive statistics, correlations, and data relationships
+
+### 🏗️ **Application Structure**
+- **Multipage Interface**: Organized navigation between data query and profiling features
+- **Session State Management**: Seamless data sharing between pages
+- **Responsive Design**: Optimized for various screen sizes and data volumes
+
+### 🔧 **Research Data Support**
 - **RS1 Study Support**: Built-in support for multi-study datasets with session filtering
 - **Legacy Compatibility**: Seamless support for existing `customID`-based datasets
 - **Synthetic Data Generation**: Generate test datasets for development and training
@@ -170,12 +206,51 @@ The application works with **any column naming convention**:
 ### Running the Application
 
 ```bash
-# Start the Streamlit application
+# Start the Streamlit application (multipage interface)
 streamlit run main.py
 
 # Start Jupyter Lab for data analysis
 jupyter lab
 ```
+
+The application now features a **multipage interface** with automatic sidebar navigation:
+
+- **🏠 Main Page**: Data query, filtering, and merging functionality
+- **📊 Data Profiling**: Comprehensive statistical analysis and reporting
+
+### Data Profiling Capabilities ✨
+
+The **Data Profiling** page provides comprehensive analysis of your research datasets:
+
+#### **Report Generation**
+- **Full Report**: Complete analysis with all statistical components
+- **Minimal Report**: Essential statistics only (recommended for large datasets)
+- **Explorative Report**: Extended analysis with detailed correlations and interactions
+
+#### **Performance Features**
+- **Smart Sampling**: Automatic sampling for datasets >5000 rows
+- **Configurable Sample Size**: Choose sample size from 1000-10000 rows
+- **Progress Indicators**: Real-time feedback during report generation
+
+#### **Analysis Components**
+- **Dataset Overview**: Shape, memory usage, data types
+- **Missing Values Analysis**: Patterns, percentages, and heatmaps
+- **Statistical Summaries**: Descriptive statistics for all variables
+- **Distribution Analysis**: Histograms and distribution plots
+- **Correlation Analysis**: Correlation matrices and scatter plots
+- **Data Quality Metrics**: Completeness, uniqueness, and validity checks
+
+#### **Export Options**
+- **HTML Reports**: Interactive, self-contained reports for sharing
+- **JSON Summaries**: Machine-readable analysis results
+- **Standalone Mode**: Upload CSV files directly for analysis
+
+#### **Using Data Profiling**
+1. **Generate data** on the main page using filters and table selection
+2. **Navigate** to the Data Profiling page via sidebar
+3. **Configure** report type and sample size (if needed)
+4. **Generate** comprehensive analysis report
+5. **Export** detailed reports for documentation or sharing
 
 ### Command Line Configuration
 
@@ -243,6 +318,12 @@ The application displays your detected data structure at startup (cross-sectiona
    - Download the complete dataset as a CSV file
    - Filename automatically reflects your filter settings and data format
 
+4. **Data Analysis** (New):
+   - Navigate to the **📊 Data Profiling** page
+   - Generate comprehensive statistical analysis reports
+   - Export detailed HTML/JSON reports for documentation
+   - Upload standalone CSV files for direct analysis
+
 ## Configuration
 
 ### Runtime Configuration
@@ -261,10 +342,13 @@ Additional settings can be modified in the `Config` class in `main.py`:
 
 ## Architecture
 
-- **Frontend**: Streamlit web interface with reactive components
+- **Frontend**: Streamlit multipage web interface with reactive components
 - **Backend**: DuckDB for in-memory SQL query processing
 - **Data Processing**: Pandas for CSV handling and data manipulation
+- **Data Analysis**: ydata-profiling for comprehensive statistical analysis
+- **Visualization**: Interactive plots and reports via streamlit-pandas-profiling
 - **Caching**: Streamlit caching for performance optimization
+- **Session Management**: Cross-page data sharing via Streamlit session state
 
 ### Key Functions
 
@@ -295,11 +379,27 @@ The application includes comprehensive error handling for:
 
 ### Code Structure
 
-- `main.py`: Main application with UI and business logic
+- `main.py`: Main application with data query UI and business logic
+- `pages/02_📊_Data_Profiling.py`: Dedicated pandas profiling interface
 - `generate_synthetic_data.py`: Synthetic data generation for testing
 - `requirements.txt`: Python package dependencies
-- `pyproject.toml`: Project configuration and dependencies
+- `pyproject.toml`: Project configuration and dependencies (includes ydata-profiling)
 - `CLAUDE.md`: Development guidelines for AI assistants
+
+### Dependencies
+
+**Core Requirements:**
+- `streamlit>=1.45.1`: Web application framework
+- `pandas>=2.3.0`: Data manipulation and analysis
+- `duckdb>=1.3.0`: Fast in-memory SQL processing
+
+**Data Profiling (New):**
+- `ydata-profiling>=4.0.0`: Comprehensive dataset profiling and analysis
+- `streamlit-pandas-profiling>=0.1.3`: Streamlit integration for profiling reports
+
+**Development:**
+- `jupyterlab>=4.4.3`: Interactive development environment
+- `plotly>=6.1.2`: Interactive visualizations
 
 ### Testing with Synthetic Data
 
