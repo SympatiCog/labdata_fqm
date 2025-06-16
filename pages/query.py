@@ -1,0 +1,1021 @@
+import dash
+from dash import html, dcc, callback, Input, Output, State
+import dash_bootstrap_components as dbc
+import base64 # For decoding file contents
+import io # For converting bytes to file-like object for pandas
+
+# Assuming utils.py is in the same directory or accessible in PYTHONPATH
+from utils import (
+    Config,
+    MergeKeys,
+    validate_csv_file,
+    save_uploaded_files_to_data_dir,
+    get_table_info
+    # Add other necessary functions/classes from utils.py as needed
+)
+
+dash.register_page(__name__, path='/', title='Query Data')
+
+# Initialize config instance
+config = Config() # Loads from or creates config.toml
+
+layout = dbc.Container([
+    dbc.Row([
+        dbc.Col([
+            html.H2("Upload CSV Files"),
+            dcc.Upload(
+                id='upload-data',
+                children=html.Div([
+                    'Drag and Drop or ',
+                    html.A('Select Files')
+                ]),
+                style={
+                    'width': '100%',
+                    'height': '60px',
+                    'lineHeight': '60px',
+                    'borderWidth': '1px',
+                    'borderStyle': 'dashed',
+                    'borderRadius': '5px',
+                    'textAlign': 'center',
+                    'margin': '10px'
+                },
+                multiple=True # Allow multiple files to be uploaded
+            ),
+            html.Div(id='upload-status'), # To display messages about file uploads
+            dcc.Store(id='upload-trigger-store'), # To trigger updates after successful uploads
+            dcc.Store(id='available-tables-store'),
+            dcc.Store(id='demographics-columns-store'),
+            dcc.Store(id='behavioral-columns-store'),
+            dcc.Store(id='column-dtypes-store'),
+            dcc.Store(id='column-ranges-store'),
+            dcc.Store(id='merge-keys-store'),
+            dcc.Store(id='session-values-store'),
+            dcc.Store(id='all-messages-store'), # For general errors/info from get_table_info
+            dcc.Store(id='merged-dataframe-store', storage_type='session'), # For sharing with profiling page
+            dcc.Store(id='rs1-checkbox-ids-store'), # To store IDs of dynamically generated RS1 checkboxes
+        ], width=12)
+    ]),
+    dbc.Row([
+        dbc.Col([
+            html.H3("Merge Strategy"),
+            html.Div(id='merge-strategy-info'),
+        ], width=12)
+    ]),
+    dbc.Row([
+        dbc.Col([
+            html.H3("Live Participant Count"),
+            html.Div(id='live-participant-count'), # Placeholder for participant count
+        ], width=12)
+    ]),
+    dbc.Row([
+        dbc.Col([
+            html.H3("Define Cohort Filters"),
+            dbc.Card(dbc.CardBody([
+                html.H4("Demographic Filters", className="card-title"),
+                dbc.Row([
+                    dbc.Col(html.Div([
+                        html.Label("Age Range:"),
+                        dcc.RangeSlider(id='age-slider', disabled=True, allowCross=False, step=1, tooltip={"placement": "bottom", "always_visible": True}),
+                        html.Div(id='age-slider-info') # To show min/max or if disabled
+                    ]), md=6),
+                    dbc.Col(html.Div([
+                        html.Label("Sex:"),
+                        dcc.Dropdown(id='sex-dropdown', multi=True, disabled=True, placeholder="Select sex...")
+                    ]), md=6),
+                ]),
+                html.Div(id='dynamic-demo-filters-placeholder', style={'marginTop': '20px'}), # For RS1, Rockland, Sessions
+            ]), style={'marginTop': '20px'}),
+
+            dbc.Card(dbc.CardBody([
+                html.H4("Phenotypic Filters", className="card-title"),
+                dbc.Button("Add Phenotypic Filter", id='add-phenotypic-filter-button', n_clicks=0, className="mb-3"),
+                html.Div(id='phenotypic-filter-list'),
+                dcc.Store(id='phenotypic-filters-state-store', data=[]),
+            ]), style={'marginTop': '20px'}),
+
+        ], md=6), # Left column for filters
+        dbc.Col([
+            html.H3("Select Data for Export"),
+            html.Div(id='table-column-selector-container'), # Placeholder for table/column selection
+        ], md=6) # Right column for selections
+    ]),
+    dbc.Row([
+        dbc.Col([
+            html.H3("Query Results"),
+            html.Div(id='results-container'), # Placeholder for results display
+        ], width=12)
+    ])
+], fluid=True)
+
+
+# Callback to update Age Slider properties
+@callback(
+    [Output('age-slider', 'min'),
+     Output('age-slider', 'max'),
+     Output('age-slider', 'value'),
+     Output('age-slider', 'marks'),
+     Output('age-slider', 'disabled'),
+     Output('age-slider-info', 'children')],
+    [Input('demographics-columns-store', 'data'),
+     Input('column-ranges-store', 'data')]
+)
+def update_age_slider(demo_cols, col_ranges):
+    if not demo_cols or 'age' not in demo_cols or not col_ranges:
+        return 0, 100, [0, 100], {}, True, "Age filter disabled: 'age' column not found in demographics or ranges not available."
+
+    age_col_key = f"{config.get_demographics_table_name()}.age" # Construct the key for column_ranges
+
+    if age_col_key in col_ranges:
+        min_age, max_age = col_ranges[age_col_key]
+        min_age = int(min_age)
+        max_age = int(max_age)
+
+        default_min, default_max = config.DEFAULT_AGE_SELECTION
+        # Ensure default selection is within actual data range
+        value = [max(min_age, default_min), min(max_age, default_max)]
+
+        marks = {i: str(i) for i in range(min_age, max_age + 1, 10)}
+        if min_age not in marks: marks[min_age] = str(min_age)
+        if max_age not in marks: marks[max_age] = str(max_age)
+
+        return min_age, max_age, value, marks, False, f"Age range: {min_age}-{max_age}"
+    else:
+        # Fallback if 'age' column is in demo_cols but no range found (should ideally not happen if get_table_info is robust)
+        return 0, 100, [config.DEFAULT_AGE_SELECTION[0], config.DEFAULT_AGE_SELECTION[1]], {}, True, "Age filter disabled: Range for 'age' column not found."
+
+# Callback to update Sex Dropdown properties
+@callback(
+    [Output('sex-dropdown', 'options'),
+     Output('sex-dropdown', 'value'),
+     Output('sex-dropdown', 'disabled')],
+    [Input('demographics-columns-store', 'data')]
+)
+def update_sex_dropdown(demo_cols):
+    if not demo_cols or 'sex' not in demo_cols:
+        return [], None, True
+
+    # Options from config.SEX_OPTIONS
+    options = [{'label': s, 'value': s} for s in config.SEX_OPTIONS]
+    return options, config.DEFAULT_SEX_SELECTION, False
+
+# Callback to populate dynamic demographic filters (RS1, Rockland, Sessions)
+@callback(
+    Output('dynamic-demo-filters-placeholder', 'children'),
+    [Input('demographics-columns-store', 'data'),
+     Input('session-values-store', 'data'),
+     Input('merge-keys-store', 'data')]
+)
+def update_dynamic_demographic_filters(demo_cols, session_values, merge_keys_dict):
+    if not demo_cols:
+        return html.P("Demographic information not yet available to populate dynamic filters.")
+
+    children = []
+
+    # RS1 Study Filters
+    if detect_rs1_format(demo_cols, config): # utils.detect_rs1_format needs config
+        children.append(html.H5("RS1 Study Selection", style={'marginTop': '15px'}))
+        rs1_checkboxes = []
+        for study_col, study_label in config.RS1_STUDY_LABELS.items():
+            rs1_checkboxes.append(
+                dbc.Checkbox(
+                    id={'type': 'rs1-study-checkbox', 'index': study_col},
+                    label=study_label,
+                    value=study_col in config.DEFAULT_STUDY_SELECTION # Default checked based on config
+                )
+            )
+        children.append(dbc.Form(rs1_checkboxes))
+
+    # Rockland Substudy Filters
+    if detect_rockland_format(demo_cols): # utils.detect_rockland_format
+        children.append(html.H5("Rockland Substudy Selection", style={'marginTop': '15px'}))
+        children.append(
+            dcc.Dropdown(
+                id='rockland-substudy-dropdown',
+                options=[{'label': s, 'value': s} for s in config.ROCKLAND_BASE_STUDIES],
+                value=config.DEFAULT_ROCKLAND_STUDIES,
+                multi=True,
+                placeholder="Select Rockland substudies..."
+            )
+        )
+
+    # Session Filters
+    if merge_keys_dict:
+        mk = MergeKeys.from_dict(merge_keys_dict)
+        if mk.is_longitudinal and mk.session_id and session_values:
+            children.append(html.H5(f"{mk.session_id} Selection", style={'marginTop': '15px'}))
+            children.append(
+                dcc.Dropdown(
+                    id='session-dropdown',
+                    options=[{'label': s, 'value': s} for s in session_values],
+                    value=session_values, # Default to all available sessions
+                    multi=True,
+                    placeholder=f"Select {mk.session_id} values..."
+                )
+            )
+
+    if not children:
+        return html.P("No dataset-specific demographic filters applicable.", style={'fontStyle': 'italic'})
+
+    return children
+
+
+# Callbacks for Phenotypic Filters
+
+# Update the list of phenotypic filters displayed
+@callback(
+    Output('phenotypic-filter-list', 'children'),
+    Input('phenotypic-filters-state-store', 'data'),
+    State('available-tables-store', 'data'),
+    State('behavioral-columns-store', 'data'), # Using this for all tables initially for column dropdown
+    State('column-dtypes-store', 'data'),
+    State('column-ranges-store', 'data'),
+    State('demographics-columns-store', 'data'), # For columns in demographics table
+    State('merge-keys-store', 'data') # To exclude ID columns
+)
+def update_phenotypic_filter_list(
+    filters_state, available_tables, behavioral_columns_by_table,
+    column_dtypes, column_ranges, demo_columns, merge_keys_dict
+):
+    if not available_tables: available_tables = []
+    if not behavioral_columns_by_table: behavioral_columns_by_table = {}
+    if not column_dtypes: column_dtypes = {}
+    if not column_ranges: column_ranges = {}
+    if not demo_columns: demo_columns = []
+
+    merge_keys = MergeKeys.from_dict(merge_keys_dict) if merge_keys_dict else MergeKeys(primary_id="unknown") # Default if not loaded
+
+    filter_elements = []
+    demographics_table_name = config.get_demographics_table_name()
+
+    # All tables available for filtering (demo + behavioral)
+    all_filterable_tables = [{'label': demographics_table_name, 'value': demographics_table_name}] + \
+                            [{'label': table, 'value': table} for table in available_tables]
+
+    for filter_config in filters_state:
+        filter_id = filter_config['id']
+
+        # Determine columns for the currently selected table in this filter
+        numeric_columns_options = []
+        selected_table_for_filter = filter_config.get('table')
+
+        if selected_table_for_filter:
+            table_actual_cols = []
+            if selected_table_for_filter == demographics_table_name:
+                table_actual_cols = demo_columns
+            elif selected_table_for_filter in behavioral_columns_by_table:
+                table_actual_cols = behavioral_columns_by_table[selected_table_for_filter]
+
+            id_cols_to_exclude = {merge_keys.primary_id, merge_keys.session_id, merge_keys.composite_id}
+
+            for col in table_actual_cols:
+                if col in id_cols_to_exclude:
+                    continue
+                # Key for column_dtypes: table_alias.column_name
+                # table_alias is 'demo' for demographics, or table_name for behavioral
+                table_alias = 'demo' if selected_table_for_filter == demographics_table_name else selected_table_for_filter
+                dtype_key = f"{table_alias}.{col}"
+                if column_dtypes.get(dtype_key) and is_numeric_column(column_dtypes[dtype_key]):
+                    numeric_columns_options.append({'label': col, 'value': col})
+
+        # Determine range for the currently selected column in this filter
+        slider_min, slider_max, slider_value = 0, 100, [0,100] # Defaults
+        slider_disabled = True
+        selected_column_for_filter = filter_config.get('column')
+
+        if selected_table_for_filter and selected_column_for_filter:
+            table_alias = 'demo' if selected_table_for_filter == demographics_table_name else selected_table_for_filter
+            range_key = f"{table_alias}.{selected_column_for_filter}"
+            if range_key in column_ranges:
+                min_val, max_val = column_ranges[range_key]
+                slider_min, slider_max = int(min_val), int(max_val)
+                # Use filter_config's stored min/max if available, otherwise full range
+                current_min = filter_config.get('min_val', slider_min)
+                current_max = filter_config.get('max_val', slider_max)
+                slider_value = [current_min, current_max]
+                slider_disabled = False
+
+
+        filter_row = dbc.Row([
+            dbc.Col(dcc.Dropdown(
+                id={'type': 'pheno-table-dropdown', 'index': filter_id},
+                options=all_filterable_tables,
+                value=filter_config.get('table'),
+                placeholder="Select Table"
+            ), width=3),
+            dbc.Col(dcc.Dropdown(
+                id={'type': 'pheno-column-dropdown', 'index': filter_id},
+                options=numeric_columns_options,
+                value=filter_config.get('column'),
+                placeholder="Select Column (Numeric)",
+                disabled=not selected_table_for_filter # Disable if no table selected
+            ), width=3),
+            dbc.Col(dcc.RangeSlider(
+                id={'type': 'pheno-range-slider', 'index': filter_id},
+                min=slider_min, max=slider_max, value=slider_value, disabled=slider_disabled,
+                tooltip={"placement": "bottom", "always_visible": True}, allowCross=False, step=1
+            ), width=4),
+            dbc.Col(dbc.Button("Remove", id={'type': 'remove-pheno-filter-button', 'index': filter_id}, color="danger", size="sm"), width=2)
+        ], className="mb-2 align-items-center")
+        filter_elements.append(filter_row)
+
+    return filter_elements
+
+# Add/Remove phenotypic filters based on button clicks
+@callback(
+    Output('phenotypic-filters-state-store', 'data'),
+    Input('add-phenotypic-filter-button', 'n_clicks'),
+    Input({'type': 'remove-pheno-filter-button', 'index': dash.ALL}, 'n_clicks'),
+    State('phenotypic-filters-state-store', 'data')
+)
+def manage_phenotypic_filters_state(add_clicks, remove_clicks, current_filters):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if button_id == 'add-phenotypic-filter-button':
+        new_filter_id = add_clicks # Simple way to get a unique ID for this session
+        new_filter = {
+            'id': new_filter_id,
+            'table': None,
+            'column': None,
+            'min_val': None, # Will be set by slider interaction or default
+            'max_val': None
+        }
+        current_filters.append(new_filter)
+    else: # Must be a remove button
+        try:
+            clicked_button_dict = dash.json.loads(button_id)
+            if isinstance(clicked_button_dict, dict) and clicked_button_dict.get('type') == 'remove-pheno-filter-button':
+                filter_id_to_remove = clicked_button_dict['index']
+                current_filters = [f for f in current_filters if f['id'] != filter_id_to_remove]
+        except Exception as e:
+            print(f"Error parsing remove button ID: {e}")
+
+
+    return current_filters
+
+# Update column dropdown options when table selection changes in a phenotypic filter
+@callback(
+    Output({'type': 'pheno-column-dropdown', 'index': dash.MATCH}, 'options'),
+    Output({'type': 'pheno-column-dropdown', 'index': dash.MATCH}, 'value'), # Reset column when table changes
+    Output({'type': 'pheno-column-dropdown', 'index': dash.MATCH}, 'disabled'),
+    Input({'type': 'pheno-table-dropdown', 'index': dash.MATCH}, 'value'),
+    State('demographics-columns-store', 'data'),
+    State('behavioral-columns-store', 'data'),
+    State('column-dtypes-store', 'data'),
+    State('merge-keys-store', 'data')
+)
+def update_pheno_column_options(selected_table, demo_cols, behavioral_cols, col_dtypes, merge_keys_dict):
+    if not selected_table or not col_dtypes:
+        return [], None, True
+
+    options = []
+    demographics_table_name = config.get_demographics_table_name()
+    table_actual_cols = []
+
+    if selected_table == demographics_table_name:
+        table_actual_cols = demo_cols if demo_cols else []
+    elif selected_table in behavioral_cols:
+        table_actual_cols = behavioral_cols[selected_table]
+
+    merge_keys = MergeKeys.from_dict(merge_keys_dict) if merge_keys_dict else MergeKeys(primary_id="unknown")
+    id_cols_to_exclude = {merge_keys.primary_id, merge_keys.session_id, merge_keys.composite_id}
+
+    for col in table_actual_cols:
+        if col in id_cols_to_exclude:
+            continue
+        table_alias = 'demo' if selected_table == demographics_table_name else selected_table
+        dtype_key = f"{table_alias}.{col}"
+        if col_dtypes.get(dtype_key) and is_numeric_column(col_dtypes[dtype_key]):
+            options.append({'label': col, 'value': col})
+
+    return options, None, not bool(options)
+
+
+# Update range slider properties when column selection changes in a phenotypic filter
+@callback(
+    [Output({'type': 'pheno-range-slider', 'index': dash.MATCH}, 'min'),
+     Output({'type': 'pheno-range-slider', 'index': dash.MATCH}, 'max'),
+     Output({'type': 'pheno-range-slider', 'index': dash.MATCH}, 'value'),
+     Output({'type': 'pheno-range-slider', 'index': dash.MATCH}, 'disabled')],
+    Input({'type': 'pheno-column-dropdown', 'index': dash.MATCH}, 'value'),
+    State({'type': 'pheno-table-dropdown', 'index': dash.MATCH}, 'value'),
+    State('column-ranges-store', 'data'),
+    State('phenotypic-filters-state-store', 'data'), # To get stored min/max for this filter
+    State({'type': 'pheno-range-slider', 'index': dash.MATCH}, 'id') # To get the filter_id
+)
+def update_pheno_range_slider(selected_column, selected_table, col_ranges, filters_state, slider_id_dict):
+    if not selected_column or not selected_table or not col_ranges:
+        return 0, 100, [0, 100], True
+
+    filter_id = slider_id_dict['index']
+    current_filter_config = next((f for f in filters_state if f['id'] == filter_id), None)
+
+    demographics_table_name = config.get_demographics_table_name()
+    table_alias = 'demo' if selected_table == demographics_table_name else selected_table
+    range_key = f"{table_alias}.{selected_column}"
+
+    if range_key in col_ranges:
+        min_val, max_val = col_ranges[range_key]
+        min_r, max_r = int(min_val), int(max_val)
+
+        # Use stored values if available and valid, else full range
+        stored_min = current_filter_config.get('min_val') if current_filter_config else None
+        stored_max = current_filter_config.get('max_val') if current_filter_config else None
+
+        current_val = [
+            stored_min if stored_min is not None and stored_min >= min_r and stored_min <= max_r else min_r,
+            stored_max if stored_max is not None and stored_max <= max_r and stored_max >= min_r else max_r
+        ]
+        # Ensure min <= max
+        if current_val[0] > current_val[1]: current_val[0] = current_val[1]
+
+        return min_r, max_r, current_val, False
+    return 0, 100, [0, 100], True
+
+
+# Callback to update the specific filter's state in phenotypic-filters-state-store
+# when its table, column, or range slider changes.
+@callback(
+    Output('phenotypic-filters-state-store', 'data', allow_duplicate=True),
+    [Input({'type': 'pheno-table-dropdown', 'index': dash.ALL}, 'value'),
+     Input({'type': 'pheno-column-dropdown', 'index': dash.ALL}, 'value'),
+     Input({'type': 'pheno-range-slider', 'index': dash.ALL}, 'value')],
+    State('phenotypic-filters-state-store', 'data'),
+    prevent_initial_call=True
+)
+def update_single_phenotypic_filter_in_store(tables, columns, ranges, current_filters_state):
+    ctx = dash.callback_context
+    if not ctx.triggered_inputs or not current_filters_state:
+        return dash.no_update
+
+    # Determine which input triggered the callback
+    triggered_input_str = list(ctx.triggered_inputs.keys())[0]
+    triggered_value = list(ctx.triggered_inputs.values())[0]
+
+    try:
+        # The input ID is a stringified JSON (e.g., '{"index":1,"type":"pheno-table-dropdown"}')
+        triggered_id_dict = dash.json.loads(triggered_input_str)
+        filter_idx = triggered_id_dict['index'] # This is the 'id' of the filter
+        prop_type = triggered_id_dict['type']
+
+        updated_filters = []
+        for f_config in current_filters_state:
+            if f_config['id'] == filter_idx: # Match the filter by its unique ID
+                updated_f_config = f_config.copy()
+                if prop_type == 'pheno-table-dropdown':
+                    updated_f_config['table'] = triggered_value
+                    updated_f_config['column'] = None # Reset column and range on table change
+                    updated_f_config['min_val'] = None
+                    updated_f_config['max_val'] = None
+                elif prop_type == 'pheno-column-dropdown':
+                    updated_f_config['column'] = triggered_value
+                    # Reset range on column change, will be updated by its own callback if valid range exists
+                    updated_f_config['min_val'] = None
+                    updated_f_config['max_val'] = None
+                elif prop_type == 'pheno-range-slider':
+                    updated_f_config['min_val'] = triggered_value[0]
+                    updated_f_config['max_val'] = triggered_value[1]
+                updated_filters.append(updated_f_config)
+            else:
+                updated_filters.append(f_config)
+        return updated_filters
+
+    except Exception as e:
+        # It's useful to log these errors for debugging
+        error_message = f"Error updating phenotypic filter state: {e}. Triggered input: {triggered_input_str}, Value: {triggered_value}"
+        logging.error(error_message)
+        # Potentially return an error message to the user via a Div if this becomes common
+        return dash.no_update
+
+
+# Live Participant Count Callback
+@callback(
+    Output('live-participant-count', 'children'),
+    [Input('age-slider', 'value'),
+     Input('sex-dropdown', 'value'),
+     Input({'type': 'rs1-study-checkbox', 'index': dash.ALL}, 'value'), # For RS1 studies
+     Input('rockland-substudy-dropdown', 'value'), # For Rockland substudies
+     Input('session-dropdown', 'value'), # For general sessions
+     Input('phenotypic-filters-state-store', 'data'),
+     # Data stores needed for query generation
+     Input('merge-keys-store', 'data'),
+     Input('available-tables-store', 'data')] # To determine tables to join for phenotypic filters
+)
+def update_live_participant_count(
+    age_range, selected_sex,
+    rs1_study_values, rockland_substudy_values, session_values, # These come from dynamic demographic filters
+    phenotypic_filters_state,
+    merge_keys_dict, available_tables
+):
+    ctx = dash.callback_context
+    if not ctx.triggered and not merge_keys_dict : # Don't run on initial load if no data yet
+        return dbc.Alert("Upload data and select filters to see participant count.", color="info")
+
+    if not merge_keys_dict:
+        return dbc.Alert("Merge strategy not determined. Cannot calculate count.", color="warning")
+
+    current_config = Config() # Load current config (data_dir etc.)
+    merge_keys = MergeKeys.from_dict(merge_keys_dict)
+
+    demographic_filters = {}
+    if age_range:
+        demographic_filters['age_range'] = age_range
+    if selected_sex:
+        demographic_filters['sex'] = selected_sex
+
+    # Collect RS1 study selections
+    # Assuming rs1_study_values corresponds to the 'value' (boolean) of dbc.Checkbox
+    # and ctx.inputs_list[2] gives us the list of component states that includes their IDs.
+    # This part is a bit complex due to dynamic component IDs.
+    # A simpler way if IDs are predictable:
+    selected_rs1_studies = []
+    if ctx.inputs_list and len(ctx.inputs_list) > 2:
+        rs1_input_states = ctx.inputs_list[2] # List of {'id': {'index': 'is_DS', 'type': 'rs1-study-checkbox'}, 'value': True/False}
+        for i, state in enumerate(rs1_input_states):
+            # The actual value comes from rs1_study_values[i]
+            # The id comes from state['id']['index']
+            if rs1_study_values[i]: # if checkbox is checked
+                 selected_rs1_studies.append(state['id']['index'])
+    if selected_rs1_studies:
+        demographic_filters['studies'] = selected_rs1_studies
+
+    if rockland_substudy_values:
+        demographic_filters['substudies'] = rockland_substudy_values
+    if session_values:
+        demographic_filters['sessions'] = session_values
+
+    active_phenotypic_filters = [
+        f for f in phenotypic_filters_state
+        if f.get('table') and f.get('column') and f.get('min_val') is not None and f.get('max_val') is not None
+    ]
+
+    # Determine tables to join: must include demographics, and any table mentioned in phenotypic filters.
+    # Also, if session filters are active, and it's longitudinal, ensure at least one behavioral table is joined
+    # if session_id is primarily on those.
+    tables_for_query = {current_config.get_demographics_table_name()}
+    for p_filter in active_phenotypic_filters:
+        tables_for_query.add(p_filter['table'])
+
+    # Add a behavioral table if session filter is active and data is longitudinal,
+    # and only demo table is currently selected for query.
+    # This logic is simplified here. A more robust way would be to check if session_id column exists in tables.
+    if merge_keys.is_longitudinal and demographic_filters.get('sessions') and len(tables_for_query) == 1 and available_tables:
+        # Add first available behavioral table to enable session filtering if it's not already there.
+        # This assumes session_id might not be in demo table or its filtering is linked to behavioral tables.
+        if available_tables[0] not in tables_for_query: # Add first one if not demo
+             tables_for_query.add(available_tables[0])
+
+
+    try:
+        base_query, params = generate_base_query_logic(
+            current_config, merge_keys, demographic_filters, active_phenotypic_filters, list(tables_for_query)
+        )
+        count_query, count_params = generate_count_query(base_query, params, merge_keys)
+
+        if count_query:
+            # Establish a new connection for each callback execution for safety in threaded Dash environment
+            # For very high frequency updates, a shared connection with appropriate locking might be considered.
+            with duckdb.connect(database=':memory:', read_only=False) as con:
+                count_result = con.execute(count_query, count_params).fetchone()
+
+            if count_result and count_result[0] is not None:
+                return dbc.Alert(f"Matching Participants: {count_result[0]}", color="success")
+            else:
+                return dbc.Alert("Could not retrieve participant count.", color="warning")
+        else:
+            return dbc.Alert("No query generated for count.", color="info")
+
+    except Exception as e:
+        logging.error(f"Error during live count query: {e}")
+        logging.error(f"Query attempted: {count_query if 'count_query' in locals() else 'N/A'}")
+        logging.error(f"Params: {count_params if 'count_params' in locals() else 'N/A'}")
+        return dbc.Alert(f"Error calculating count: {str(e)}", color="danger")
+
+
+@callback(
+    [Output('upload-status', 'children'),
+     Output('upload-trigger-store', 'data')],
+    [Input('upload-data', 'contents')],
+    [State('upload-data', 'filename'),
+     State('upload-data', 'last_modified')],
+    prevent_initial_call=True
+)
+def handle_file_uploads(list_of_contents, list_of_names, list_of_dates):
+    if list_of_contents is None:
+        return html.Div("No files uploaded."), dash.no_update
+
+    messages = []
+    all_files_valid = True
+    saved_file_names = []
+    file_byte_contents = []
+
+    if list_of_names:
+        for i, (c, n, d) in enumerate(zip(list_of_contents, list_of_names, list_of_dates)):
+            try:
+                content_type, content_string = c.split(',')
+                decoded = base64.b64decode(content_string)
+
+                # Validate each file
+                validation_errors, df = validate_csv_file(decoded, n) # Using the new signature
+
+                if validation_errors:
+                    all_files_valid = False
+                    for error in validation_errors:
+                        messages.append(html.Div(f"Error with {n}: {error}", style={'color': 'red'}))
+                else:
+                    messages.append(html.Div(f"File {n} is valid.", style={'color': 'green'}))
+                    file_byte_contents.append(decoded)
+                    saved_file_names.append(n) # Keep track of names for saving
+
+            except Exception as e:
+                all_files_valid = False
+                messages.append(html.Div(f"Error processing file {n}: {str(e)}", style={'color': 'red'}))
+                continue # Skip to next file if this one errors out during processing
+
+    if all_files_valid and file_byte_contents:
+        # Save valid files
+        # utils.save_uploaded_files_to_data_dir expects lists of contents and names
+        success_msgs, error_msgs = save_uploaded_files_to_data_dir(file_byte_contents, saved_file_names, config.DATA_DIR)
+        for msg in success_msgs:
+            messages.append(html.Div(msg, style={'color': 'green'}))
+        for err_msg in error_msgs:
+            messages.append(html.Div(err_msg, style={'color': 'red'}))
+
+        if not error_msgs: # Only trigger if all saves were successful
+             # Trigger downstream updates by changing the store's data
+            return html.Div(messages), {'timestamp': dash.utils.to_iso_8601(dash.utils.get_utcnow())}
+        else:
+            return html.Div(messages), dash.no_update
+
+    elif not file_byte_contents: # No valid files to save
+        messages.append(html.Div("No valid files were processed to save.", style={'color': 'orange'}))
+        return html.Div(messages), dash.no_update
+    else: # Some files were invalid
+        return html.Div(messages), dash.no_update
+
+
+@callback(
+    [Output('available-tables-store', 'data'),
+     Output('demographics-columns-store', 'data'),
+     Output('behavioral-columns-store', 'data'),
+     Output('column-dtypes-store', 'data'),
+     Output('column-ranges-store', 'data'),
+     Output('merge-keys-store', 'data'),
+     Output('session-values-store', 'data'),
+     Output('all-messages-store', 'data'), # To display errors from get_table_info
+     Output('merge-strategy-info', 'children')],
+    [Input('upload-trigger-store', 'data'), # Triggered by successful file upload
+     Input('upload-data', 'contents')] # Also trigger on initial page load if files are "already there" (less common for upload)
+)
+def load_initial_data_info(trigger_data, _): # trigger_data from upload-trigger-store, _ for upload-data contents (initial)
+    # We need to use the global config instance that was loaded/created when query.py was imported.
+    # Or, if config can change dynamically (e.g. via UI), it needs to be managed in a dcc.Store
+
+    # Re-fetch config if it could have changed (e.g., if settings were editable in another part of the app)
+    # For now, assume config loaded at app start is sufficient, or re-initialize.
+    current_config = Config() # This will reload from TOML or use defaults
+
+    (behavioral_tables, demographics_cols, behavioral_cols_by_table,
+     col_dtypes, col_ranges, merge_keys_dict,
+     actions_taken, session_vals, is_empty, messages) = get_table_info(current_config)
+
+    info_messages = []
+    if messages: # 'messages' is 'all_messages' from get_table_info, which is List[str]
+        for msg_text in messages:
+            color = "black" # Default color
+            msg_lower = msg_text.lower()
+            if "error" in msg_lower:
+                color = "red"
+            elif "warning" in msg_lower or "warn" in msg_lower: # Catch 'warning' or 'warn'
+                color = "orange"
+            elif "info" in msg_lower or "note" in msg_lower: # Catch 'info' or 'note'
+                color = "blue"
+            elif "✅" in msg_text or "success" in msg_lower: # Catch success indicators
+                color = "green"
+
+            info_messages.append(html.P(msg_text, style={'color': color}))
+
+    if actions_taken:
+        info_messages.append(html.H5("Dataset Preparation Actions:", style={'marginTop': '10px'}))
+        for action in actions_taken:
+            info_messages.append(html.P(action))
+
+    merge_strategy_display = [html.H5("Merge Strategy:", style={'marginTop': '10px'})]
+    if merge_keys_dict:
+        mk = MergeKeys.from_dict(merge_keys_dict)
+        if mk.is_longitudinal:
+            merge_strategy_display.append(html.P(f"Detected: Longitudinal data."))
+            merge_strategy_display.append(html.P(f"Primary ID: {mk.primary_id}"))
+            merge_strategy_display.append(html.P(f"Session ID: {mk.session_id}"))
+            merge_strategy_display.append(html.P(f"Composite ID (for merge): {mk.composite_id}"))
+        else:
+            merge_strategy_display.append(html.P(f"Detected: Cross-sectional data."))
+            merge_strategy_display.append(html.P(f"Primary ID (for merge): {mk.primary_id}"))
+    else:
+        merge_strategy_display.append(html.P("Merge strategy not determined yet. Upload data or check configuration."))
+
+    # Combine messages from get_table_info with other status messages
+    # Place dataset preparation actions and merge strategy info after general messages.
+    status_display_content = info_messages + merge_strategy_display
+    status_display = html.Div(status_display_content)
+
+
+    return (behavioral_tables, demographics_cols, behavioral_cols_by_table,
+            col_dtypes, col_ranges, merge_keys_dict, session_vals,
+            messages, # Store raw messages from get_table_info for potential detailed display
+            status_display) # This now goes to 'merge-strategy-info' Div
+
+
+# Callbacks for Table and Column Selection
+@callback(
+    Output('table-multiselect', 'options'),
+    Input('available-tables-store', 'data')
+)
+def update_table_multiselect_options(available_tables_data):
+    if not available_tables_data:
+        return []
+    # available_tables_data is a list of table names (strings)
+    return [{'label': table, 'value': table} for table in available_tables_data]
+
+@callback(
+    Output('column-selection-area', 'children'),
+    Input('table-multiselect', 'value'), # List of selected table names
+    State('demographics-columns-store', 'data'),
+    State('behavioral-columns-store', 'data'),
+    State('merge-keys-store', 'data'),
+    State('selected-columns-per-table-store', 'data') # To pre-populate selections
+)
+def update_column_selection_area(selected_tables, demo_cols, behavioral_cols, merge_keys_dict, stored_selections):
+    if not selected_tables:
+        return dbc.Alert("Select tables above to choose columns for export.", color="info")
+
+    if not demo_cols: demo_cols = []
+    if not behavioral_cols: behavioral_cols = {}
+    if not stored_selections: stored_selections = {}
+
+    merge_keys = MergeKeys.from_dict(merge_keys_dict) if merge_keys_dict else MergeKeys(primary_id="unknown")
+    id_cols_to_exclude = {merge_keys.primary_id, merge_keys.session_id, merge_keys.composite_id}
+    demographics_table_name = config.get_demographics_table_name()
+
+    cards = []
+    for table_name in selected_tables:
+        options = []
+        actual_cols_for_table = []
+        is_demographics_table = (table_name == demographics_table_name)
+
+        if is_demographics_table:
+            actual_cols_for_table = demo_cols
+        elif table_name in behavioral_cols:
+            actual_cols_for_table = behavioral_cols[table_name]
+
+        for col in actual_cols_for_table:
+            if col not in id_cols_to_exclude: # Exclude ID columns from selection
+                options.append({'label': col, 'value': col})
+
+        # Get previously selected columns for this table, if any
+        current_selection_for_table = stored_selections.get(table_name, [])
+
+        card_body_content = [
+            dcc.Dropdown(
+                id={'type': 'column-select-dropdown', 'table': table_name},
+                options=options,
+                value=current_selection_for_table, # Pre-populate with stored selections
+                multi=True,
+                placeholder=f"Select columns from {table_name}..."
+            )
+        ]
+        # If it's the demographics table, add a note that ID columns are auto-included
+        if is_demographics_table:
+            card_body_content.insert(0, html.P(f"All demographics columns (including {merge_keys.get_merge_column()}) will be included by default. You can select additional ones if needed, or deselect to only include IDs/merge keys.", className="small text-muted"))
+
+
+        cards.append(dbc.Card([
+            dbc.CardHeader(f"Columns for: {table_name}"),
+            dbc.CardBody(card_body_content)
+        ], className="mb-3"))
+
+    return cards
+
+@callback(
+    Output('selected-columns-per-table-store', 'data'),
+    Input({'type': 'column-select-dropdown', 'table': dash.ALL}, 'value'), # Values from all column dropdowns
+    State({'type': 'column-select-dropdown', 'table': dash.ALL}, 'id'), # IDs of all column dropdowns
+    State('selected-columns-per-table-store', 'data') # Current stored data
+)
+def update_selected_columns_store(all_column_values, all_column_ids, current_stored_data):
+    ctx = dash.callback_context
+    if not ctx.triggered and not current_stored_data: # If nothing triggered and store is empty, do nothing
+        return dash.no_update
+
+    # Make a copy to modify, or initialize if None
+    updated_selections = current_stored_data.copy() if current_stored_data else {}
+
+    # If callback was triggered by a specific dropdown changing
+    if ctx.triggered:
+        for i, component_id_dict in enumerate(all_column_ids):
+            table_name = component_id_dict['table']
+            selected_cols_for_table = all_column_values[i]
+
+            if selected_cols_for_table is not None: # An empty selection is an empty list, None means no interaction yet
+                updated_selections[table_name] = selected_cols_for_table
+            elif table_name in updated_selections and selected_cols_for_table is None:
+                # This case might occur if a table is deselected from table-multiselect,
+                # its column dropdown might fire a final None value.
+                # However, the update_column_selection_area callback should remove the dropdown.
+                # If a user manually clears a dropdown, it becomes an empty list.
+                pass # No change if value is None and table already existed or didn't.
+
+    # This ensures that if a table is deselected from 'table-multiselect',
+    # its column selections are removed from the store.
+    # We get the list of currently *rendered* tables from the IDs.
+    # Any table in 'updated_selections' NOT in this list should be removed.
+    current_rendered_tables = {comp_id['table'] for comp_id in all_column_ids}
+    keys_to_remove = [table_key for table_key in updated_selections if table_key not in current_rendered_tables]
+    for key in keys_to_remove:
+        del updated_selections[key]
+
+    return updated_selections
+
+# Callback to control "Enwiden Data" checkbox visibility
+@callback(
+    Output('enwiden-checkbox-wrapper', 'style'), # Target the wrapper div
+    Input('merge-keys-store', 'data')
+)
+def update_enwiden_checkbox_visibility(merge_keys_dict):
+    if merge_keys_dict:
+        mk = MergeKeys.from_dict(merge_keys_dict)
+        if mk.is_longitudinal:
+            return {'display': 'block', 'marginTop': '10px'} # Show
+    return {'display': 'none'} # Hide
+
+# Callback for Data Generation and Download
+@callback(
+    [Output('data-preview-area', 'children'),
+     Output('download-dataframe-csv', 'data'),
+     Output('merged-dataframe-store', 'data')], # Store for profiling page
+    Input('generate-data-button', 'n_clicks'),
+    [State('age-slider', 'value'),
+     State('sex-dropdown', 'value'),
+     State({'type': 'rs1-study-checkbox', 'index': dash.ALL}, 'value'),
+     State('rockland-substudy-dropdown', 'value'),
+     State('session-dropdown', 'value'),
+     State('phenotypic-filters-state-store', 'data'),
+     State('selected-columns-per-table-store', 'data'),
+     State('enwiden-data-checkbox', 'value'), # List of checked values (e.g., ['on'] or [])
+     State('merge-keys-store', 'data'),
+     State('available-tables-store', 'data'), # Needed for tables_to_join logic
+     State('table-multiselect', 'value')] # Explicitly selected tables for export
+)
+def handle_generate_data(
+    n_clicks,
+    age_range, selected_sex, rs1_study_values, rockland_substudy_values, session_filter_values,
+    phenotypic_filters_state, selected_columns_per_table,
+    enwiden_checkbox_value, merge_keys_dict, available_tables, tables_selected_for_export
+):
+    if n_clicks == 0 or not merge_keys_dict:
+        return dbc.Alert("Click 'Generate Merged Data' after selecting filters and columns.", color="info"), None, None
+
+    current_config = Config() # Load current config
+    merge_keys = MergeKeys.from_dict(merge_keys_dict)
+
+    # --- Collect Demographic Filters ---
+    demographic_filters = {}
+    if age_range: demographic_filters['age_range'] = age_range
+    if selected_sex: demographic_filters['sex'] = selected_sex
+
+    selected_rs1_studies = []
+    # Accessing rs1_study_values directly as it's a list of booleans from the checkboxes
+    # Need to map these back to the study column names using the order from config.RS1_STUDY_LABELS
+    # This assumes the order of checkboxes matches RS1_STUDY_LABELS.items()
+    # A more robust way would be to get the component IDs if they were static or use ctx.inputs_list carefully.
+    # For dynamically generated checkboxes via a callback, their state needs to be carefully managed.
+    # Let's assume the `update_dynamic_demographic_filters` callback ensures IDs are {'type': 'rs1-study-checkbox', 'index': study_col}
+    # and rs1_study_values is a list of their `value` properties (True/False)
+
+    # Simplified: If rs1_study_values is available and True, get its corresponding ID.
+    # This requires that the Input for rs1_study_values provides enough context or
+    # that we fetch rs1_study_ids from another source (e.g. a hidden store updated by dynamic filter callback)
+    # For now, we'll rely on the direct values if they are simple lists of selected items.
+    # If rs1_study_values is a list of booleans, we need to associate them with the study names.
+    # This part is tricky with dash.ALL for dynamically generated checkboxes if not handled carefully.
+    # A common pattern is to have the callback that generates these also store their IDs/relevant info.
+    # Given the current structure, we assume rs1_study_values are the *values* of the checked items,
+    # and we need their corresponding *IDs* (study column names).
+    # This part of the logic might need refinement based on how `{'type': 'rs1-study-checkbox', 'index': dash.ALL}` actually passes data.
+    # It typically passes a list of the `property` specified (here, 'value').
+    # We need the 'index' part of the ID for those that are True.
+    # This requires iterating through `dash.callback_context.inputs_list` or `triggered` if it's an Input.
+    # For now, let's assume `rs1_study_values` contains the `study_col` if checked.
+    # This would be true if the `value` property of dbc.Checkbox was set to `study_col` itself.
+    # Rechecking the dynamic filter callback: value is set to `study_col in config.DEFAULT_STUDY_SELECTION`
+    # This means rs1_study_values is a list of booleans.
+    # We need the corresponding 'index' from the ID for those that are True.
+     # This is now handled by taking rs1_checkbox_ids_store as State.
+
+    # Correctly accessing RS1 study selections:
+    rs1_checkbox_ids = rs1_checkbox_ids_store if rs1_checkbox_ids_store else []
+    if rs1_study_values and len(rs1_study_values) == len(rs1_checkbox_ids):
+        selected_rs1_studies = [rs1_checkbox_ids[i] for i, checked in enumerate(rs1_study_values) if checked]
+        if selected_rs1_studies:
+            demographic_filters['studies'] = selected_rs1_studies
+
+    if rockland_substudy_values: demographic_filters['substudies'] = rockland_substudy_values
+    if session_filter_values: demographic_filters['sessions'] = session_filter_values
+
+    # --- Phenotypic Filters ---
+    active_phenotypic_filters = [
+        f for f in phenotypic_filters_state
+        if f.get('table') and f.get('column') and f.get('min_val') is not None and f.get('max_val') is not None
+    ]
+
+    # --- Determine Tables to Join ---
+    # Start with tables explicitly selected for export
+    tables_for_query = set(tables_selected_for_export if tables_selected_for_export else [])
+    tables_for_query.add(current_config.get_demographics_table_name()) # Always include demographics
+    for p_filter in active_phenotypic_filters: # Add tables from active phenotypic filters
+        tables_for_query.add(p_filter['table'])
+
+    if merge_keys.is_longitudinal and demographic_filters.get('sessions') and \
+       len(tables_for_query.intersection(set(available_tables if available_tables else []))) == 0 and \
+       current_config.get_demographics_table_name() in tables_for_query and \
+       len(tables_for_query) == 1 and available_tables:
+        tables_for_query.add(available_tables[0]) # Add a behavioral table if needed for session join
+
+    # --- Selected Columns for Query ---
+    # If no columns are selected for a table in tables_selected_for_export, select all its non-ID columns.
+    # For tables *only* in phenotypic filters (not for export), we don't need to select their columns explicitly for SELECT clause,
+    # as they are just for filtering via JOIN. Demo table columns are handled by demo.*
+
+    query_selected_columns = selected_columns_per_table.copy() if selected_columns_per_table else {}
+    # For tables selected for export but with no specific columns chosen, this implies "all columns" for that table.
+    # The generate_data_query handles this: if a table is in selected_tables (i.e. tables_for_query here)
+    # and has entries in selected_columns, those are used. If demo.* is default, other tables need explicit columns.
+    # For this implementation, we assume selected_columns_per_table_store correctly reflects user choices.
+    # If a table is in tables_selected_for_export, it should be in query_selected_columns.
+    # If user wants all columns from table X, they should use "select all" in its column dropdown (not yet implemented).
+    # For now, only explicitly selected columns via UI are passed. generate_data_query adds demo.*
+
+    try:
+        base_query, params = generate_base_query_logic(
+            current_config, merge_keys, demographic_filters, active_phenotypic_filters, list(tables_for_query)
+        )
+        data_query, data_params = generate_data_query(
+            base_query, params, list(tables_for_query), query_selected_columns
+        )
+
+        if not data_query:
+            return dbc.Alert("Could not generate data query.", color="warning"), None, None
+
+        with duckdb.connect(database=':memory:', read_only=False) as con:
+            result_df = con.execute(data_query, data_params).fetchdf()
+
+        original_row_count = len(result_df)
+
+        if enwiden_checkbox_value and 'on' in enwiden_checkbox_value and merge_keys.is_longitudinal:
+            result_df = enwiden_longitudinal_data(result_df, merge_keys)
+            enwiden_info = f" (enwidened from {original_row_count} rows to {len(result_df)} rows)"
+        else:
+            enwiden_info = ""
+
+        if result_df.empty:
+            return dbc.Alert("No data found for the selected criteria.", color="info"), None, None
+
+        # Prepare for DataTable
+        dt_columns = [{"name": i, "id": i} for i in result_df.columns]
+        # For performance, only show head in preview
+        dt_data = result_df.head(current_config.MAX_DISPLAY_ROWS).to_dict('records')
+
+        preview_table = dash_table.DataTable(
+            data=dt_data,
+            columns=dt_columns,
+            page_size=10,
+            style_table={'overflowX': 'auto'},
+            filter_action="native",
+            sort_action="native",
+        )
+
+        # Prepare for Download
+        # Create a filename (simplified version)
+        filename_parts = ["merged_data"]
+        if age_range: filename_parts.append(f"age{age_range[0]}-{age_range[1]}")
+        # Add more parts based on other filters if desired
+        filename = "_".join(filename_parts) + ".csv"
+
+        download_content = dcc.send_data_frame(result_df.to_csv, filename, index=False)
+
+        return (
+            html.Div([
+                dbc.Alert(f"Query successful. Displaying first {min(len(result_df), current_config.MAX_DISPLAY_ROWS)} of {len(result_df)} total rows{enwiden_info}.", color="success"),
+                preview_table
+            ]),
+            download_content,
+            result_df.to_dict('records') # Store full data for profiling page (consider size limits)
+        )
+
+    except Exception as e:
+        logging.error(f"Error during data generation: {e}")
+        logging.error(f"Query attempted: {data_query if 'data_query' in locals() else 'N/A'}")
+        return dbc.Alert(f"Error generating data: {str(e)}", color="danger"), None, None

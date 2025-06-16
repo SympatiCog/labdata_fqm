@@ -1,0 +1,937 @@
+import os
+import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional, List, Tuple, Dict
+import pandas as pd
+import toml
+import logging
+
+# Configure basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Merge Strategy Classes ---
+@dataclass
+class MergeKeys:
+    """Encapsulates the merge keys for a dataset."""
+    primary_id: str  # e.g., 'ursi', 'subject_id'
+    session_id: Optional[str] = None  # e.g., 'session_num'
+    composite_id: Optional[str] = None  # e.g., 'customID' (derived)
+    is_longitudinal: bool = False
+
+    def get_merge_column(self) -> str:
+        """Returns the appropriate column for merge operations."""
+        if self.is_longitudinal:
+            return self.composite_id if self.composite_id else self.primary_id
+        return self.primary_id
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for serialization."""
+        return {
+            'primary_id': self.primary_id,
+            'session_id': self.session_id,
+            'composite_id': self.composite_id,
+            'is_longitudinal': self.is_longitudinal
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'MergeKeys':
+        """Create from dictionary for deserialization."""
+        return cls(
+            primary_id=data['primary_id'],
+            session_id=data.get('session_id'),
+            composite_id=data.get('composite_id'),
+            is_longitudinal=data.get('is_longitudinal', False)
+        )
+
+class MergeStrategy(ABC):
+    """Abstract base class for merge strategies."""
+
+    @abstractmethod
+    def detect_structure(self, demographics_path: str) -> MergeKeys:
+        """Detect the merge structure from demographics file."""
+        pass
+
+    @abstractmethod
+    def prepare_datasets(self, data_dir: str, merge_keys: MergeKeys) -> Tuple[bool, List[str]]:
+        """Prepare datasets with appropriate merge keys. Returns success status and list of actions."""
+        pass
+
+class FlexibleMergeStrategy(MergeStrategy):
+    """Flexible merge strategy that adapts to cross-sectional or longitudinal data."""
+
+    def __init__(self, primary_id_column: str = 'ursi', session_column: str = 'session_num', composite_id_column: str = 'customID'):
+        self.primary_id_column = primary_id_column
+        self.session_column = session_column
+        self.composite_id_column = composite_id_column
+
+    def detect_structure(self, demographics_path: str) -> MergeKeys:
+        """Detect whether data is cross-sectional or longitudinal."""
+        try:
+            if not os.path.exists(demographics_path):
+                raise FileNotFoundError(f"Demographics file not found: {demographics_path}")
+
+            df_headers = pd.read_csv(demographics_path, nrows=0)
+            columns = df_headers.columns.tolist()
+
+            has_primary_id = self.primary_id_column in columns
+            has_session_id = self.session_column in columns
+            has_composite_id = self.composite_id_column in columns
+
+            if has_primary_id and has_session_id:
+                return MergeKeys(
+                    primary_id=self.primary_id_column,
+                    session_id=self.session_column,
+                    composite_id=self.composite_id_column,
+                    is_longitudinal=True
+                )
+            elif has_primary_id:
+                return MergeKeys(primary_id=self.primary_id_column, is_longitudinal=False)
+            elif has_composite_id:
+                return MergeKeys(primary_id=self.composite_id_column, is_longitudinal=False)
+            else:
+                id_candidates = [col for col in columns if 'id' in col.lower() or 'ursi' in col.lower()]
+                if id_candidates:
+                    return MergeKeys(primary_id=id_candidates[0], is_longitudinal=False)
+                else:
+                    raise ValueError(f"No suitable ID column found in {demographics_path}")
+        except (FileNotFoundError, pd.errors.EmptyDataError) as e:
+            logging.error(f"Error detecting merge structure (file/data error): {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Error detecting merge structure: {e}")
+            # Fallback to a default if detection fails critically
+            return MergeKeys(primary_id='customID', is_longitudinal=False)
+
+
+    def prepare_datasets(self, data_dir: str, merge_keys: MergeKeys) -> Tuple[bool, List[str]]:
+        """Prepare datasets with composite IDs if longitudinal. Returns success and actions."""
+        actions_taken = []
+        if not merge_keys.is_longitudinal:
+            return True, actions_taken
+
+        try:
+            csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+            for csv_file in csv_files:
+                file_path = os.path.join(data_dir, csv_file)
+                action = self._add_composite_id_if_needed(file_path, merge_keys)
+                if action:
+                    actions_taken.append(action)
+            return True, actions_taken
+        except Exception as e:
+            logging.error(f"Error preparing longitudinal datasets: {e}")
+            actions_taken.append(f"Error preparing longitudinal datasets: {e}")
+            return False, actions_taken
+
+    def _add_composite_id_if_needed(self, file_path: str, merge_keys: MergeKeys) -> Optional[str]:
+        """Add composite ID column to a file if it doesn't exist or validate existing one."""
+        filename = os.path.basename(file_path)
+        try:
+            df = pd.read_csv(file_path)
+            if not (merge_keys.primary_id in df.columns and merge_keys.session_id in df.columns):
+                return None # Not applicable for this file
+
+            expected_composite_id_col_name = merge_keys.composite_id if merge_keys.composite_id else "customID"
+
+            # Ensure primary_id and session_id columns are treated as strings for concatenation
+            primary_series = df[merge_keys.primary_id].astype(str)
+            session_series = df[merge_keys.session_id].astype(str)
+            expected_composite_values = primary_series + '_' + session_series
+
+            if expected_composite_id_col_name in df.columns:
+                current_composite_values = df[expected_composite_id_col_name].astype(str)
+                if not current_composite_values.equals(expected_composite_values):
+                    df[expected_composite_id_col_name] = expected_composite_values
+                    df.to_csv(file_path, index=False)
+                    return f"🔧 Fixed inconsistent {expected_composite_id_col_name} in {filename}"
+                return None # Already consistent
+            else:
+                df[expected_composite_id_col_name] = expected_composite_values
+                df.to_csv(file_path, index=False)
+                return f"✅ Added {expected_composite_id_col_name} to {filename}"
+        except Exception as e:
+            return f"⚠️ Could not process {filename} for composite ID: {str(e)}"
+
+# --- Configuration ---
+@dataclass
+class Config:
+    CONFIG_FILE_PATH: str = "config.toml"
+
+    # File and directory settings
+    DATA_DIR: str = 'data'
+    DEMOGRAPHICS_FILE: str = 'demographics.csv'
+    # PARTICIPANT_ID_COLUMN is now dynamically determined by MergeKeys
+    PRIMARY_ID_COLUMN: str = 'ursi'
+    SESSION_COLUMN: str = 'session_num'
+    COMPOSITE_ID_COLUMN: str = 'customID'
+
+    _merge_strategy: Optional[FlexibleMergeStrategy] = field(init=False, default=None)
+    _merge_keys: Optional[MergeKeys] = field(init=False, default=None)
+
+    # UI defaults - these might be moved or handled differently in Dash
+    DEFAULT_AGE_RANGE: Tuple[int, int] = (0, 120)
+    DEFAULT_AGE_SELECTION: Tuple[int, int] = (18, 80)
+    DEFAULT_FILTER_RANGE: Tuple[int, int] = (0, 100)
+    MAX_DISPLAY_ROWS: int = 50 # For Dash tables, pagination is better
+    CACHE_TTL_SECONDS: int = 600 # For Dash, use Flask-Caching or similar
+
+    SEX_MAPPING: Dict[str, float] = field(default_factory=lambda: {
+        'Female': 1.0, 'Male': 2.0, 'Other': 3.0, 'Unspecified': 0.0
+    })
+    SEX_OPTIONS: List[str] = field(default_factory=lambda: ['Female', 'Male', 'Other', 'Unspecified'])
+    DEFAULT_SEX_SELECTION: List[str] = field(default_factory=lambda: ['Female', 'Male'])
+
+    # Study/Session specific configs - may need review for Dash context
+    RS1_STUDY_COLUMNS: List[str] = field(default_factory=lambda: ['is_DS', 'is_ALG', 'is_CLG', 'is_NFB'])
+    RS1_STUDY_LABELS: Dict[str, str] = field(default_factory=lambda: {
+        'is_DS': 'DS Study', 'is_ALG': 'ALG Study', 'is_CLG': 'CLG Study', 'is_NFB': 'NFB Study'
+    })
+    DEFAULT_STUDY_SELECTION: List[str] = field(default_factory=lambda: ['is_DS', 'is_ALG', 'is_CLG', 'is_NFB'])
+    ROCKLAND_BASE_STUDIES: List[str] = field(default_factory=lambda: ['Discovery', 'Longitudinal_Adult', 'Longitudinal_Child', 'Neurofeedback'])
+    DEFAULT_ROCKLAND_STUDIES: List[str] = field(default_factory=lambda: ['Discovery', 'Longitudinal_Adult', 'Longitudinal_Child', 'Neurofeedback'])
+    SESSION_OPTIONS: List[str] = field(default_factory=lambda: ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2'])
+    DEFAULT_SESSION_SELECTION: List[str] = field(default_factory=lambda: ['BAS1', 'BAS2', 'BAS3', 'FLU1', 'FLU2', 'FLU3', 'NFB', 'TRT', 'TRT2'])
+    ROCKLAND_SAMPLE1_COLUMNS: List[str] = field(default_factory=lambda: ['rockland-sample1'])
+    ROCKLAND_SAMPLE1_LABELS: Dict[str, str] = field(default_factory=lambda: {'rockland-sample1': 'Rockland Sample 1'})
+    DEFAULT_ROCKLAND_SAMPLE1_SELECTION: List[str] = field(default_factory=lambda: ['rockland-sample1'])
+
+
+    def __post_init__(self):
+        self.load_config() # Load config when an instance is created
+
+    def save_config(self):
+        config_data = {
+            'data_dir': self.DATA_DIR,
+            'demographics_file': self.DEMOGRAPHICS_FILE,
+            'primary_id_column': self.PRIMARY_ID_COLUMN,
+            'session_column': self.SESSION_COLUMN,
+            'composite_id_column': self.COMPOSITE_ID_COLUMN,
+            'default_age_min': self.DEFAULT_AGE_SELECTION[0],
+            'default_age_max': self.DEFAULT_AGE_SELECTION[1],
+            'sex_mapping': self.SEX_MAPPING
+        }
+        try:
+            with open(self.CONFIG_FILE_PATH, 'w') as f:
+                toml.dump(config_data, f)
+            logging.info(f"Configuration saved to {self.CONFIG_FILE_PATH}")
+        except Exception as e:
+            logging.error(f"Error saving configuration: {e}")
+            raise # Re-raise for Dash to handle or display
+
+    def load_config(self):
+        try:
+            with open(self.CONFIG_FILE_PATH) as f:
+                config_data = toml.load(f)
+
+            self.DATA_DIR = config_data.get('data_dir', self.DATA_DIR)
+            self.DEMOGRAPHICS_FILE = config_data.get('demographics_file', self.DEMOGRAPHICS_FILE)
+            self.PRIMARY_ID_COLUMN = config_data.get('primary_id_column', self.PRIMARY_ID_COLUMN)
+            self.SESSION_COLUMN = config_data.get('session_column', self.SESSION_COLUMN)
+            self.COMPOSITE_ID_COLUMN = config_data.get('composite_id_column', self.COMPOSITE_ID_COLUMN)
+
+            default_age_min = config_data.get('default_age_min', self.DEFAULT_AGE_SELECTION[0])
+            default_age_max = config_data.get('default_age_max', self.DEFAULT_AGE_SELECTION[1])
+            self.DEFAULT_AGE_SELECTION = (default_age_min, default_age_max)
+            self.SEX_MAPPING = config_data.get('sex_mapping', self.SEX_MAPPING)
+
+            logging.info(f"Configuration loaded from {self.CONFIG_FILE_PATH}")
+            self.refresh_merge_detection() # Apply loaded settings to merge strategy
+
+        except FileNotFoundError:
+            logging.info(f"{self.CONFIG_FILE_PATH} not found. Creating with default values.")
+            self.save_config() # Create with defaults if not found
+        except toml.TomlDecodeError as e:
+            logging.error(f"Error decoding {self.CONFIG_FILE_PATH}: {e}. Using default configuration.")
+            # Potentially re-save defaults or raise error
+        except Exception as e:
+            logging.error(f"Error loading configuration: {e}. Using default configuration.")
+            # Potentially re-save defaults or raise error
+
+    def get_demographics_table_name(self) -> str:
+        return Path(self.DEMOGRAPHICS_FILE).stem
+
+    def get_merge_strategy(self) -> FlexibleMergeStrategy:
+        if self._merge_strategy is None:
+            self._merge_strategy = FlexibleMergeStrategy(
+                primary_id_column=self.PRIMARY_ID_COLUMN,
+                session_column=self.SESSION_COLUMN,
+                composite_id_column=self.COMPOSITE_ID_COLUMN
+            )
+        return self._merge_strategy
+
+    def get_merge_keys(self) -> MergeKeys:
+        if self._merge_keys is None:
+            demographics_path = os.path.join(self.DATA_DIR, self.DEMOGRAPHICS_FILE)
+            try:
+                # Ensure data directory exists before trying to detect structure
+                Path(self.DATA_DIR).mkdir(parents=True, exist_ok=True)
+                if not os.path.exists(demographics_path):
+                    logging.warning(f"Demographics file {demographics_path} not found. Using default merge keys.")
+                    # Provide default keys if demographics file is missing
+                    self._merge_keys = MergeKeys(
+                        primary_id=self.PRIMARY_ID_COLUMN,
+                        session_id=self.SESSION_COLUMN,
+                        composite_id=self.COMPOSITE_ID_COLUMN,
+                        is_longitudinal=True # Assume longitudinal if not sure
+                    )
+                else:
+                    self._merge_keys = self.get_merge_strategy().detect_structure(demographics_path)
+            except Exception as e:
+                logging.error(f"Failed to detect merge keys from {demographics_path}: {e}. Using default merge keys.")
+                self._merge_keys = MergeKeys(
+                    primary_id=self.PRIMARY_ID_COLUMN,
+                    session_id=self.SESSION_COLUMN,
+                    composite_id=self.COMPOSITE_ID_COLUMN,
+                    is_longitudinal=True # Assume longitudinal if not sure
+                )
+        return self._merge_keys
+
+    def refresh_merge_detection(self) -> None:
+        self._merge_keys = None
+        self._merge_strategy = None
+        # Re-initialize strategy with current config values
+        self._merge_strategy = FlexibleMergeStrategy(
+            primary_id_column=self.PRIMARY_ID_COLUMN,
+            session_column=self.SESSION_COLUMN,
+            composite_id_column=self.COMPOSITE_ID_COLUMN
+        )
+        # Trigger re-detection of merge keys
+        self.get_merge_keys()
+
+
+# --- File Handling Helper Functions ---
+def secure_filename(filename: str) -> str:
+    filename = os.path.basename(filename)
+    filename = re.sub(r'\s+', '_', filename)
+    filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    filename = re.sub(r'_+', '_', filename)
+    filename = filename.strip('_')
+    if len(filename) > 255:
+        name, ext = os.path.splitext(filename)
+        filename = name[:250] + ext
+    return filename
+
+def validate_csv_file(file_content: bytes, filename: str, required_columns: Optional[List[str]] = None) -> Tuple[List[str], Optional[pd.DataFrame]]:
+    """
+    Validate uploaded CSV file content.
+    Args:
+        file_content: Bytes of the file content.
+        filename: Original name of the file.
+        required_columns: List of column names that must be present.
+    Returns:
+        Tuple of (list of error messages, DataFrame or None)
+    """
+    errors = []
+    df = None
+    try:
+        # File size check (e.g., 50MB limit)
+        if len(file_content) > 50 * 1024 * 1024:
+            errors.append(f"File '{filename}' too large (maximum 50MB)")
+
+        # File extension check (already handled by dcc.Upload, but good for direct calls)
+        if not filename.lower().endswith('.csv'):
+            errors.append(f"File '{filename}' must be a CSV (.csv extension)")
+
+        if not errors: # Proceed only if basic checks pass
+            # Try to read the CSV from bytes
+            from io import BytesIO
+            df = pd.read_csv(BytesIO(file_content))
+
+            if len(df) == 0:
+                errors.append(f"File '{filename}' is empty (no data rows)")
+            if required_columns:
+                missing_cols = set(required_columns) - set(df.columns)
+                if missing_cols:
+                    errors.append(f"File '{filename}' missing required columns: {', '.join(missing_cols)}")
+            if len(df.columns) == 0:
+                errors.append(f"File '{filename}' has no columns")
+            elif len(df.columns) > 1000: # Arbitrary limit
+                errors.append(f"File '{filename}' has too many columns (maximum 1000)")
+            if len(df.columns) != len(set(df.columns)):
+                duplicates = [col for col in df.columns if list(df.columns).count(col) > 1]
+                errors.append(f"File '{filename}' has duplicate column names: {', '.join(set(duplicates))}")
+
+    except pd.errors.EmptyDataError:
+        errors.append(f"File '{filename}' is empty or contains no valid CSV data")
+    except pd.errors.ParserError as e:
+        errors.append(f"Invalid CSV format in '{filename}': {str(e)}")
+    except UnicodeDecodeError:
+        errors.append(f"File '{filename}' encoding not supported (please use UTF-8)")
+    except Exception as e:
+        errors.append(f"Error reading file '{filename}': {str(e)}")
+
+    return errors, df if not errors and df is not None else None
+
+
+def save_uploaded_files_to_data_dir(file_contents: List[bytes], filenames: List[str], data_dir: str) -> Tuple[List[str], List[str]]:
+    """
+    Save uploaded file contents to the data directory.
+    Args:
+        file_contents: List of file contents as bytes.
+        filenames: List of original filenames.
+        data_dir: Target directory.
+    Returns:
+        Tuple of (list of success messages, list of error messages)
+    """
+    success_messages = []
+    error_messages = []
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+
+    for content, filename in zip(file_contents, filenames):
+        safe_filename = secure_filename(filename)
+        file_path = Path(data_dir) / safe_filename
+
+        # Handle filename conflicts
+        counter = 1
+        original_file_path = file_path
+        while file_path.exists():
+            base_name, ext = os.path.splitext(original_file_path.name)
+            file_path = Path(data_dir) / f"{base_name}_{counter}{ext}"
+            counter += 1
+
+        if counter > 1: # A new name was generated
+            success_messages.append(f"File '{filename}' already exists, saved as '{file_path.name}'")
+
+        try:
+            with open(file_path, "wb") as f:
+                f.write(content)
+            success_messages.append(f"✅ Saved '{filename}' as '{file_path.name}' ({len(content):,} bytes)")
+        except Exception as e:
+            error_messages.append(f"❌ Failed to save '{filename}': {str(e)}")
+
+    return success_messages, error_messages
+
+# --- Data Analysis Helper Functions ---
+
+def scan_csv_files(data_dir: str) -> Tuple[List[str], List[str]]:
+    """Scans directory for CSV files. Returns (list of filenames, list of error messages)."""
+    errors = []
+    files_found = []
+    try:
+        Path(data_dir).mkdir(parents=True, exist_ok=True) # Ensure dir exists
+        files = os.listdir(data_dir)
+        files_found = [f for f in files if f.endswith('.csv')]
+    except FileNotFoundError:
+        errors.append(f"Error: The data directory was not found at '{data_dir}'.")
+    except PermissionError:
+        errors.append(f"Error: Permission denied accessing directory '{data_dir}'.")
+    except OSError as e:
+        errors.append(f"Error accessing directory '{data_dir}': {e}")
+    return files_found, errors
+
+def get_table_alias(table_name: str, demo_table_name: str) -> str:
+    return 'demo' if table_name == demo_table_name else table_name
+
+def is_numeric_column(dtype_str: str) -> bool:
+    return 'int' in dtype_str or 'float' in dtype_str
+
+def detect_rs1_format(demographics_columns: List[str], config: Config) -> bool:
+    return all(col in demographics_columns for col in config.RS1_STUDY_COLUMNS)
+
+def detect_rockland_format(demographics_columns: List[str]) -> bool:
+    return 'all_studies' in demographics_columns
+
+
+def get_unique_session_values(data_dir: str, merge_keys: MergeKeys) -> Tuple[List[str], List[str]]:
+    """Extract unique session values. Returns (session_values, error_messages)."""
+    if not merge_keys.is_longitudinal or not merge_keys.session_id:
+        return [], []
+
+    unique_sessions = set()
+    errors = []
+    try:
+        csv_files, scan_errors = scan_csv_files(data_dir)
+        errors.extend(scan_errors)
+
+        for csv_file in csv_files:
+            file_path = os.path.join(data_dir, csv_file)
+            try:
+                df_sample = pd.read_csv(file_path, nrows=0) # Read only headers
+                if merge_keys.session_id in df_sample.columns:
+                    # If session_id is present, read that column
+                    df_session_col = pd.read_csv(file_path, usecols=[merge_keys.session_id])
+                    sessions = df_session_col[merge_keys.session_id].dropna().astype(str).unique()
+                    unique_sessions.update(sessions)
+            except Exception as e:
+                errors.append(f"Could not read session values from {csv_file}: {e}")
+                continue
+    except Exception as e:
+        errors.append(f"Error scanning for session values: {e}")
+        return [], errors
+    return sorted(list(unique_sessions)), errors
+
+def validate_csv_structure(file_path: str, filename: str, merge_keys: MergeKeys) -> List[str]:
+    """Validates basic CSV structure. Returns list of error messages."""
+    errors = []
+    try:
+        df_headers = pd.read_csv(file_path, nrows=0)
+        columns = df_headers.columns.tolist()
+
+        if not columns:
+            errors.append(f"Warning: '{filename}' has no columns.")
+            return errors
+
+        if not merge_keys.is_longitudinal:
+            if merge_keys.primary_id not in columns:
+                errors.append(f"Warning: '{filename}' missing required column '{merge_keys.primary_id}'.")
+        else:
+            has_composite = merge_keys.composite_id and merge_keys.composite_id in columns
+            has_primary = merge_keys.primary_id in columns
+            if not has_composite and not has_primary:
+                errors.append(f"Warning: '{filename}' missing '{merge_keys.primary_id}' or '{merge_keys.composite_id}'.")
+    except Exception as e:
+        errors.append(f"Error validating '{filename}': {e}")
+    return errors
+
+
+def extract_column_metadata_fast(file_path: str, table_name: str, is_demo_table: bool, merge_keys: MergeKeys, demo_table_name: str) -> Tuple[List[str], Dict[str, str], List[str]]:
+    """Extracts columns and dtypes. Returns (columns_list, column_dtypes_dict, error_messages)."""
+    errors = []
+    columns = []
+    column_dtypes = {}
+    try:
+        df_name = get_table_alias(table_name if not is_demo_table else demo_table_name, demo_table_name)
+        df_sample = pd.read_csv(file_path, nrows=100) # Sample for metadata
+
+        id_columns_to_exclude = {merge_keys.primary_id}
+        if merge_keys.session_id: id_columns_to_exclude.add(merge_keys.session_id)
+        if merge_keys.composite_id and merge_keys.composite_id in df_sample.columns:
+            id_columns_to_exclude.add(merge_keys.composite_id)
+
+        columns = [col for col in df_sample.columns if col not in id_columns_to_exclude]
+        for col in df_sample.columns:
+            if col in id_columns_to_exclude: continue
+            column_dtypes[f"{df_name}.{col}"] = str(df_sample[col].dtype)
+    except Exception as e:
+        errors.append(f"Error extracting metadata from {Path(file_path).name}: {e}")
+    return columns, column_dtypes, errors
+
+def calculate_numeric_ranges_fast(file_path: str, table_name: str, is_demo_table: bool, column_dtypes: Dict[str, str], merge_keys: MergeKeys, demo_table_name: str) -> Tuple[Dict[str, Tuple[float, float]], List[str]]:
+    """Calculates min/max for numeric columns. Returns (ranges_dict, error_messages)."""
+    errors = []
+    column_ranges = {}
+    try:
+        df_name = get_table_alias(table_name if not is_demo_table else demo_table_name, demo_table_name)
+
+        id_columns_to_exclude = {merge_keys.primary_id}
+        if merge_keys.session_id: id_columns_to_exclude.add(merge_keys.session_id)
+        if merge_keys.composite_id: id_columns_to_exclude.add(merge_keys.composite_id)
+
+        numeric_cols = []
+        for col_key, dtype_str in column_dtypes.items():
+            if col_key.startswith(f"{df_name}.") and is_numeric_column(dtype_str):
+                col_name = col_key.split('.', 1)[1]
+                if col_name not in id_columns_to_exclude:
+                    numeric_cols.append(col_name)
+
+        if not numeric_cols: return {}, []
+
+        chunk_iter = pd.read_csv(file_path, chunksize=1000, usecols=numeric_cols)
+        min_vals = {col: float('inf') for col in numeric_cols}
+        max_vals = {col: float('-inf') for col in numeric_cols}
+
+        for chunk in chunk_iter:
+            for col in numeric_cols:
+                if col in chunk.columns:
+                    numeric_series = pd.to_numeric(chunk[col], errors='coerce')
+                    col_min, col_max = numeric_series.min(), numeric_series.max()
+                    if pd.notna(col_min): min_vals[col] = min(min_vals[col], col_min)
+                    if pd.notna(col_max): max_vals[col] = max(max_vals[col], col_max)
+
+        for col in numeric_cols:
+            if min_vals[col] != float('inf') and max_vals[col] != float('-inf'):
+                column_ranges[f"{df_name}.{col}"] = (float(min_vals[col]), float(max_vals[col]))
+    except Exception as e:
+        errors.append(f"Error calculating numeric ranges for {Path(file_path).name}: {e}")
+    return column_ranges, errors
+
+
+def get_table_info(config: Config) -> Tuple[
+    List[str], List[str], Dict[str, List[str]], Dict[str, str],
+    Dict[str, Tuple[float, float]], Dict, List[str], List[str], bool, List[str]
+]:
+    """
+    Scans data directory for CSVs and returns info.
+    Returns: behavioral_tables, demographics_columns, behavioral_columns_by_table,
+             column_dtypes, column_ranges, merge_keys_dict, actions_taken,
+             session_values, is_empty_state, all_messages (errors/warnings)
+    """
+    all_messages = []
+
+    # Ensure data directory exists, create if not
+    try:
+        Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        all_messages.append(f"Error creating data directory {config.DATA_DIR}: {e}")
+        # Return empty state if data directory cannot be accessed/created
+        return [], [], {}, {}, {}, {}, [], [], True, all_messages
+
+    merge_keys = config.get_merge_keys() # This now handles missing demo file by returning defaults
+
+    actions_taken = []
+    if merge_keys.is_longitudinal:
+        success, prep_actions = config.get_merge_strategy().prepare_datasets(config.DATA_DIR, merge_keys)
+        actions_taken.extend(prep_actions)
+        if not success:
+            all_messages.append("Failed to prepare longitudinal datasets.")
+
+    behavioral_tables: List[str] = []
+    demographics_columns: List[str] = []
+    behavioral_columns_by_table: Dict[str, List[str]] = {}
+    column_dtypes: Dict[str, str] = {}
+    column_ranges: Dict[str, Tuple[float, float]] = {}
+
+    all_csv_files, scan_errors = scan_csv_files(config.DATA_DIR)
+    all_messages.extend(scan_errors)
+
+    is_empty_state = not all_csv_files
+    if is_empty_state:
+        all_messages.append("No CSV files found in the data directory.")
+        # Return default merge_keys if empty, as get_merge_keys() would have provided them
+        return [], [], {}, {}, {}, merge_keys.to_dict(), [], [], True, all_messages
+
+    demo_table_name = config.get_demographics_table_name()
+
+    for f_name in all_csv_files:
+        table_name = Path(f_name).stem
+        is_demo_table = (f_name == config.DEMOGRAPHICS_FILE)
+        if not is_demo_table:
+            behavioral_tables.append(table_name)
+
+        table_path = os.path.join(config.DATA_DIR, f_name)
+
+        val_errors = validate_csv_structure(table_path, f_name, merge_keys)
+        if val_errors:
+            all_messages.extend(val_errors)
+            continue # Skip processing this file if structure is invalid
+
+        try:
+            cols, dtypes, meta_errors = extract_column_metadata_fast(table_path, table_name, is_demo_table, merge_keys, demo_table_name)
+            all_messages.extend(meta_errors)
+            column_dtypes.update(dtypes)
+
+            if is_demo_table:
+                # For demographics, get all columns directly from a sample read for full list
+                df_sample_demo = pd.read_csv(table_path, nrows=0)
+                demographics_columns = df_sample_demo.columns.tolist()
+                # Basic validation for essential demo columns (can be expanded)
+                if 'age' not in demographics_columns:
+                    all_messages.append(f"Info: 'age' column not found in {f_name}. Age filtering will be affected.")
+                if 'sex' not in demographics_columns:
+                    all_messages.append(f"Info: 'sex' column not found in {f_name}. Sex filtering will be affected.")
+            else:
+                behavioral_columns_by_table[table_name] = cols
+
+            ranges, range_errors = calculate_numeric_ranges_fast(table_path, table_name, is_demo_table, dtypes, merge_keys, demo_table_name)
+            all_messages.extend(range_errors)
+            column_ranges.update(ranges)
+
+        except Exception as e: # Catch-all for other processing errors for this file
+            all_messages.append(f"Unexpected error processing file {f_name}: {e}")
+            continue
+
+    session_values, sess_errors = get_unique_session_values(config.DATA_DIR, merge_keys)
+    all_messages.extend(sess_errors)
+
+    return (behavioral_tables, demographics_columns, behavioral_columns_by_table,
+            column_dtypes, column_ranges, merge_keys.to_dict(), actions_taken,
+            session_values, False, all_messages)
+
+# Example of how Config might be instantiated and used globally if needed
+# config_instance = Config()
+# config_instance.load_config() # Load or create config.toml
+# Then pass config_instance to functions needing it, or access its members.
+# For Dash, it's often better to create and manage config within callbacks or app setup.
+
+
+# --- Query Generation Logic ---
+
+def generate_base_query_logic(
+    config: Config,
+    merge_keys: MergeKeys,
+    demographic_filters: Dict[str, Any],
+    behavioral_filters: List[Dict[str, Any]],
+    tables_to_join: List[str]
+) -> Tuple[str, List[Any]]:
+    """
+    Generates the common FROM, JOIN, and WHERE clauses for all queries.
+    """
+    # Use instance-specific values from the passed config object
+    demographics_table_name = config.get_demographics_table_name()
+
+    if not tables_to_join:
+        tables_to_join = [demographics_table_name]
+
+    # If session filtering is active, ensure we have behavioral tables.
+    if demographic_filters.get('sessions'):
+        behavioral_tables_present = any(table != demographics_table_name for table in tables_to_join)
+        if not behavioral_tables_present:
+            # Try to add a behavioral table if only demographics is present and session filter is active
+            # This logic might need refinement based on actual available tables stored elsewhere
+            # For now, this is a simplified version.
+            # In a Dash app, available tables would come from a store.
+            # We'll assume 'scan_csv_files' can be used for this, though it's an FS call.
+            # Ideally, table list comes from a more direct source like available_tables_store.
+
+            # This part is tricky as utils.py shouldn't ideally depend on app state.
+            # For now, we will assume 'tables_to_join' is comprehensive enough or
+            # this logic is handled before calling this function.
+            # If not, this function might not behave as expected if only demo table is passed
+            # and session filters are applied.
+            pass # Placeholder for now, as direct FS scan here is not ideal.
+
+    base_table_path = os.path.join(config.DATA_DIR, config.DEMOGRAPHICS_FILE).replace('\\', '/')
+    from_join_clause = f"FROM read_csv_auto('{base_table_path}') AS demo"
+
+    all_join_tables: set[str] = set(tables_to_join)
+    for bf in behavioral_filters:
+        if bf.get('table'):
+            all_join_tables.add(bf['table'])
+
+    for table in all_join_tables:
+        if table == demographics_table_name:
+            continue
+        table_path = os.path.join(config.DATA_DIR, f"{table}.csv").replace('\\', '/')
+        # Ensure merge_column is correctly determined using the MergeKeys object
+        merge_column = merge_keys.get_merge_column()
+        from_join_clause += f"""
+        LEFT JOIN read_csv_auto('{table_path}') AS {table}
+        ON demo."{merge_column}" = {table}."{merge_column}" """
+        # Quoted merge_column in case it contains special characters or spaces, though ideally it shouldn't.
+
+    where_clauses: List[str] = []
+    params: Dict[str, Any] = {}
+
+    # 1. Demographic Filters
+    if demographic_filters.get('age_range'):
+        where_clauses.append("demo.age BETWEEN ? AND ?")
+        params['age_min'] = demographic_filters['age_range'][0]
+        params['age_max'] = demographic_filters['age_range'][1]
+
+    if demographic_filters.get('sex'):
+        # Use SEX_MAPPING from the config instance
+        numeric_sex_values = [config.SEX_MAPPING[s] for s in demographic_filters['sex'] if s in config.SEX_MAPPING]
+        if numeric_sex_values:
+            placeholders = ', '.join(['?' for _ in numeric_sex_values])
+            where_clauses.append(f"demo.sex IN ({placeholders})")
+            for i, num_sex in enumerate(numeric_sex_values):
+                params[f'sex_{i}'] = num_sex
+
+    # RS1 Study Filters
+    if demographic_filters.get('studies'):
+        study_conditions = []
+        for study in demographic_filters['studies']:
+            # Ensure study column names are quoted if they contain special characters (unlikely for these specific ones)
+            study_conditions.append(f"demo.\"{study}\" = ?") # Assuming study is a column name like 'is_DS'
+            params[f'study_{study}'] = 1 # Assuming boolean stored as 1 for true
+        if study_conditions:
+            where_clauses.append(f"({' OR '.join(study_conditions)})")
+
+    # Rockland Sample1 Substudy Filters
+    if demographic_filters.get('substudies'):
+        substudy_conditions = []
+        for substudy in demographic_filters['substudies']:
+            substudy_conditions.append("demo.all_studies LIKE ?") # Assuming 'all_studies' is the column
+            params[f'substudy_{substudy}'] = f'%{substudy}%'
+        if substudy_conditions:
+            where_clauses.append(f"({' OR '.join(substudy_conditions)})")
+
+    # Session Filters
+    if demographic_filters.get('sessions') and merge_keys.session_id:
+        session_conditions = []
+        session_placeholders = ', '.join(['?' for _ in demographic_filters['sessions']])
+        # Iterate through tables that are known to potentially have session info
+        # This should ideally be based on metadata (e.g., if table has session_id column)
+        for table_alias_for_session in all_join_tables:
+            # We need to know if this table *has* the session_id column.
+            # This is a simplification; ideally, we'd check column_dtypes or similar metadata.
+            # For now, assume any non-demographics table *might* have it if it's longitudinal.
+            if table_alias_for_session != 'demo': # Demographics table might not have session_id in the same way
+                 session_conditions.append(f"{table_alias_for_session}.\"{merge_keys.session_id}\" IN ({session_placeholders})")
+
+        if session_conditions:
+            # This creates a complex OR condition if multiple tables have session_id.
+            # It might be intended that session filter applies to *any* table having that session.
+            where_clauses.append(f"({' OR '.join(session_conditions)})")
+            # Parameters for sessions need to be added for each condition if OR logic is complex.
+            # Simplified: assume one set of session parameters is enough if the column name is consistent.
+            for session_val in demographic_filters['sessions']:
+                 params[f'session_{len(params)}'] = session_val
+
+    # 2. Behavioral Filters
+    for i, b_filter in enumerate(behavioral_filters):
+        if b_filter.get('table') and b_filter.get('column'):
+            # Use get_table_alias from utils.py, passing demo_table_name from config
+            df_name = get_table_alias(b_filter['table'], demographics_table_name)
+            col_name = f'"{b_filter["column"]}"' # Quote column name
+            where_clauses.append(f"{df_name}.{col_name} BETWEEN ? AND ?")
+            params[f"b_filter_min_{i}"] = b_filter['min_val']
+            params[f"b_filter_max_{i}"] = b_filter['max_val']
+
+    where_clause_str = ""
+    if where_clauses:
+        where_clause_str = "\nWHERE " + " AND ".join(where_clauses)
+
+    return f"{from_join_clause}{where_clause_str}", list(params.values())
+
+
+def generate_data_query(
+    base_query_logic: str,
+    params: List[Any],
+    selected_tables: List[str],
+    selected_columns: Dict[str, List[str]],
+    # config: Config, # Not strictly needed if demo table name is handled by base_query
+    # merge_keys: MergeKeys # Not strictly needed here if demo.* is always selected
+) -> Tuple[Optional[str], Optional[List[Any]]]:
+    """Generates the full SQL query to fetch data."""
+    if not base_query_logic:
+        return None, None
+
+    # Always select all columns from the demographics table (aliased as 'demo')
+    select_clause = "SELECT demo.*"
+
+    # Add selected columns from other tables
+    for table, columns in selected_columns.items():
+        # We assume 'table' here is the actual table name (not alias 'demo')
+        if table in selected_tables and columns: # Ensure table was intended to be joined
+            for col in columns:
+                # Columns from non-demographic tables are selected as table_name."column_name"
+                select_clause += f', {table}."{col}"'
+
+    return f"{select_clause} {base_query_logic}", params
+
+
+def generate_count_query(
+    base_query_logic: str,
+    params: List[Any],
+    merge_keys: MergeKeys
+    # config: Config # Not needed if demo table alias is fixed in base_query
+) -> Tuple[Optional[str], Optional[List[Any]]]:
+    """Generates a query to count distinct participants."""
+    if not base_query_logic:
+        return None, None
+
+    # Use the merge column from the 'demo' aliased demographics table
+    merge_column = merge_keys.get_merge_column()
+    select_clause = f'SELECT COUNT(DISTINCT demo."{merge_column}")'
+
+    return f"{select_clause} {base_query_logic}", params
+
+def enwiden_longitudinal_data(
+    df: pd.DataFrame,
+    merge_keys: MergeKeys,
+    # selected_columns_per_table: Dict[str, List[str]] # This might not be strictly needed if df already has the right columns
+) -> pd.DataFrame:
+    """
+    Pivots longitudinal data so each subject has one row with session-specific columns.
+    Transforms columns like 'age' into 'age_BAS1', 'age_BAS2', etc.
+    """
+    if not merge_keys.is_longitudinal or not merge_keys.session_id or merge_keys.session_id not in df.columns:
+        logging.info("Data is not longitudinal or session_id is missing; enwidening not applied.")
+        return df
+
+    if merge_keys.primary_id not in df.columns:
+        logging.error(f"Primary ID column '{merge_keys.primary_id}' not found in DataFrame for enwidening.")
+        raise ValueError(f"Primary ID column '{merge_keys.primary_id}' not found for enwidening.")
+
+    # Identify columns to pivot (exclude ID columns)
+    id_columns_to_exclude = {merge_keys.primary_id}
+    if merge_keys.composite_id and merge_keys.composite_id in df.columns:
+        id_columns_to_exclude.add(merge_keys.composite_id)
+    # session_id is used for pivoting, so it's implicitly handled, but good to be explicit.
+    id_columns_to_exclude.add(merge_keys.session_id)
+
+
+    # Columns that should be pivoted are all columns NOT in id_columns_to_exclude
+    pivot_columns = [col for col in df.columns if col not in id_columns_to_exclude]
+
+    if not pivot_columns:
+        logging.info("No columns found to pivot for enwidening.")
+        return df.drop_duplicates(subset=[merge_keys.primary_id])
+
+
+    # Determine static columns (those that don't vary by session for any given primary_id)
+    static_columns = []
+    # Temporarily set index to primary_id and session_id to check for static nature
+    # This requires primary_id and session_id to be present
+
+    # Check if session_id and primary_id are in df columns
+    if merge_keys.session_id not in df.columns or merge_keys.primary_id not in df.columns:
+        logging.error("session_id or primary_id missing, cannot determine static columns accurately.")
+        # Proceed by assuming all pivot_columns are dynamic, or handle as error
+        # For now, treat all as dynamic if this happens.
+        pass # dynamic_columns will be all pivot_columns
+    else:
+        try:
+            # Check for sufficient data to perform groupby meaningfully
+            if not df.empty and len(df) > 1:
+                 # Count unique values per primary_id for each pivot_column, after dropping NaNs within groups
+                for col in pivot_columns:
+                    if col in df.columns:
+                        # Group by primary_id and check if the column has only one unique value (or all NaNs) per subject
+                        is_static = df.groupby(merge_keys.primary_id)[col].nunique(dropna=True).max(skipna=True) <= 1
+                        if is_static:
+                            static_columns.append(col)
+            else: # Not enough data to determine, assume all dynamic
+                pass
+
+        except Exception as e:
+            logging.warning(f"Could not accurately determine static columns due to: {e}. Assuming all pivot columns are dynamic.")
+            static_columns = [] # Fallback: treat all as dynamic
+
+
+    dynamic_columns = [col for col in pivot_columns if col not in static_columns]
+
+    # Start with base (primary_id and static columns)
+    # Ensure we handle cases where static_columns might be empty
+    if static_columns:
+        # Take the first non-NA value for static columns per primary_id
+        static_df_grouped = df.groupby(merge_keys.primary_id)[static_columns].first()
+        base_df = static_df_grouped.reset_index()
+    else:
+        # If no static columns, base_df is just unique primary_ids
+        base_df = df[[merge_keys.primary_id]].drop_duplicates().reset_index(drop=True)
+
+    if not dynamic_columns:
+        logging.info("No dynamic columns to pivot. Returning base data with static columns.")
+        return base_df
+
+    # Pivot dynamic columns
+    try:
+        pivoted_df = df.pivot_table(
+            index=merge_keys.primary_id,
+            columns=merge_keys.session_id,
+            values=dynamic_columns,
+            aggfunc='first' # Use 'first' to take the first available value if multiple exist for same subject-session
+        )
+    except Exception as e:
+        logging.error(f"Error during pivot_table: {e}")
+        # This can happen if, for example, there are duplicate entries for a subject-session combination
+        # that pandas cannot resolve into the pivot structure with 'first'.
+        # Attempt to resolve by dropping duplicates before pivot
+        logging.info("Attempting to resolve pivot error by dropping duplicates based on primary_id, session_id, and dynamic_columns.")
+        df_deduplicated = df.drop_duplicates(subset=[merge_keys.primary_id, merge_keys.session_id] + dynamic_columns)
+        try:
+            pivoted_df = df_deduplicated.pivot_table(
+                index=merge_keys.primary_id,
+                columns=merge_keys.session_id,
+                values=dynamic_columns,
+                aggfunc='first'
+            )
+        except Exception as e_after_dedup:
+            logging.error(f"Error during pivot_table even after deduplication: {e_after_dedup}")
+            raise ValueError(f"Failed to pivot data: {e_after_dedup}")
+
+
+    # Flatten MultiIndex columns: from (value, session) to value_session
+    pivoted_df.columns = [f"{val_col}_{ses_col}" for val_col, ses_col in pivoted_df.columns]
+    pivoted_df = pivoted_df.reset_index()
+
+    # Merge static data with pivoted dynamic data
+    if base_df.empty: # Should not happen if df was not empty
+        final_df = pivoted_df
+    else:
+        final_df = pd.merge(base_df, pivoted_df, on=merge_keys.primary_id, how='left')
+
+    return final_df

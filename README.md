@@ -1,553 +1,132 @@
-# The Basic Scientist's Basic Data Tool
+# The Basic Scientist's Basic Data Tool (Plotly Dash Version)
 
-A Streamlit-based web application for laboratory research data filter, query, merge, and comprehensive data profiling. This tool allows researchers to interactively query, merge, download queried datasets - similar to web-based tools like LORIS or RedCap - and backed by DuckDB for efficient data processing. You can additionally generate detailed profiling reports for CSV datasets using an intuitive multipage interface.
+A Plotly Dash-based web application for laboratory research data filtering, querying, merging, and comprehensive data profiling. This tool allows researchers to interactively query, merge, download queried datasets, and generate detailed profiling reports for CSV datasets using an intuitive multipage interface, backed by DuckDB for efficient data processing.
 
 ## Who Wants/Needs This Application?
 
-* You have data stored in multiple CSV files. 
+* You have research data stored in multiple CSV files.
 * You'd like to be able to:
-	* select a subset of variables from across your CSVs.
-	* merge those variables into a single wide-format CSV for further analysis.
-	* possibly filter out some participants.
-* **You are smart enough to avoid error-prone copy/paste operations in Excel.**
-* You want the power and efficiency of SQL, but don't want to **create a SQL database / SQL server**. 
+    * Select a subset of variables from across your CSVs.
+    * Merge those variables into a single wide-format CSV for further analysis.
+    * Filter out participants based on various criteria.
+* **You prefer a GUI over manual scripting for these tasks and want to avoid error-prone spreadsheet operations.**
+* You want the power and efficiency of SQL without needing to set up or manage a traditional SQL database/server.
 
 **Key advantages:**
-- **No dependence on your IT department** - this lightweight application runs on your local laptop or desktop.
-- **Easy data updates** - to update your database, just update your CSV(s), drop them in your application's data folder, and restart the application.
-- **No database administration** - no need to negotiate with your IT department or cajole a tech-savvy colleague to update your SQL database.
-- **Familiar workflow** - works like web-based research databases you already know, but with complete local control.
-
-## 🆕 What's New in Latest Version
-
-### 📊 **Comprehensive Data Profiling**
-- **New dedicated profiling page** with ydata-profiling integration
-- **Interactive statistical reports** with visualizations and data quality analysis
-- **Multiple report modes**: Full, Minimal, and Explorative analysis options
-- **Export capabilities**: Download detailed HTML and JSON reports
-
-### 🏗️ **Multipage Interface**
-- **Organized navigation** between data query and analysis features
-- **Seamless data sharing** between pages via session state
-- **Improved user experience** with dedicated workflows
-
-### ⚙️ **Configuration & Management**
-- **TOML-based Configuration**: Persistent settings via `config.toml` file
-- **Interactive GUI Configuration**: Real-time settings editor in application sidebar
-- **Flexible Configuration Hierarchy**: CLI → TOML → Defaults with intelligent override
-- **Auto-save & Validation**: Configuration changes automatically saved and validated
-
-### 🔧 **Technical Improvements**
-- **Enhanced serialization** for better caching performance
-- **Performance optimization** for large datasets with smart sampling
-- **Comprehensive error handling** with fallback statistics
+- **Local Operation**: Runs on your local machine, no IT department dependency for core use.
+- **Easy Data Updates**: Update your data by modifying your CSV files in the designated data folder.
+- **No Database Administration**: Leverages DuckDB for on-the-fly SQL processing of CSVs.
+- **Familiar Workflow**: Provides an interactive experience for data manipulation and analysis.
 
 ## Features
 
 ### 🔍 **Data Query & Merging**
-- **Smart Data Structure Detection**: Automatically detects cross-sectional vs longitudinal data formats
-- **Flexible Column Configuration**: Works with any column naming convention via CLI parameters
-- **Interactive Data Filtering**: Apply demographic and phenotypic filters to identify participant cohorts
-- **Real-time Participant Count**: See matching participant counts update as you adjust filters
-- **Intelligent Table Merging**: Adaptive merging strategy for different research data formats
-- **Flexible Column Selection**: Choose specific columns from each table for export
-- **Data Pivoting (Enwiden)**: Transform longitudinal data from long to wide format (e.g., `age_BAS1`, `age_BAS2`)
-- **Fast Performance**: Optimized data loading and query execution using DuckDB
-- **Export Functionality**: Download filtered and merged datasets as CSV files
+- **Smart Data Structure Detection**: Automatically detects cross-sectional vs. longitudinal data formats.
+- **Flexible Column Configuration**: Adapts to common column naming conventions for participant IDs and session identifiers.
+- **Interactive Data Filtering**: Apply demographic (age, sex, study-specific) and phenotypic filters (numeric ranges from any table).
+- **Real-time Participant Count**: See matching participant counts update as you adjust filters.
+- **Intelligent Table Merging**: Merges data based on detected or configured merge keys.
+- **Flexible Column Selection**: Choose specific columns from each table for export.
+- **Data Pivoting (Enwiden)**: Transform longitudinal data from long to wide format (e.g., `age_BAS1`, `age_BAS2`).
+- **Fast Performance**: Utilizes DuckDB for efficient query execution on CSVs.
+- **Export Functionality**: Download filtered and merged datasets as CSV files.
 
-### 📊 **Data Profiling & Analysis** ✨ *NEW*
-- **Comprehensive Data Profiling**: Generate detailed statistical analysis reports using ydata-profiling
-- **Interactive Visualizations**: Correlation matrices, distribution plots, missing values heatmaps
-- **Multiple Report Types**: Full, Minimal, and Explorative profiling modes
-- **Performance Optimized**: Smart sampling for large datasets (>5000 rows)
-- **Export Reports**: Download detailed HTML and JSON profiling reports
-- **Standalone Analysis**: Upload CSV files directly for profiling without main query
-- **Data Quality Assessment**: Identify missing values, outliers, and data type issues
-- **Statistical Summaries**: Descriptive statistics, correlations, and data relationships
+### 📊 **Data Profiling & Analysis**
+- **Comprehensive Data Profiling**: Generate detailed statistical analysis reports using `ydata-profiling`.
+- **Interactive Visualizations**: Includes correlation matrices, distribution plots, missing values heatmaps, etc., within the report.
+- **Multiple Report Types**: Select Full, Minimal, or Explorative profiling modes.
+- **Performance Optimized**: Option to use sampling for large datasets.
+- **Export Reports**: Download detailed HTML and JSON profiling reports.
+- **Standalone Analysis**: Upload CSV files directly on the profiling page for analysis.
+- **Data Quality Assessment**: Identify missing values, outliers, and data type issues through the report.
 
 ### 🏗️ **Application Structure**
-- **Multipage Interface**: Organized navigation between data query and profiling features
-- **Session State Management**: Seamless data sharing between pages
-- **Responsive Design**: Optimized for various screen sizes and data volumes
+- **Multipage Interface**: Organized navigation between Data Query and Data Profiling pages.
+- **Session State Management**: Shares merged data from the Query page to the Profiling page.
+- **Responsive Design**: Built with Dash Bootstrap Components for usability on various screen sizes.
 
 ### ⚙️ **Configuration & Management**
-- **TOML-based Configuration**: Persistent settings via `config.toml` file
-- **GUI Configuration Interface**: Interactive settings editor in the application sidebar
-- **Runtime CLI Override**: Command-line parameters can override TOML settings
-- **Auto-save & Reload**: Configuration changes automatically saved and applied
-- **Settings Validation**: Real-time validation of configuration parameters
+- **TOML-based Configuration**: Uses `config.toml` for persistent settings like data directory, default column names, and UI preferences.
+- **Automatic Creation**: `config.toml` is created with default values on first run if not present.
 
-### 🔧 **Research Data Support**
-- **RS1 Study Support**: Built-in support for multi-study datasets with session filtering
-- **Legacy Compatibility**: Seamless support for existing `customID`-based datasets
-- **Synthetic Data Generation**: Generate test datasets for development and training
-
-## Getting Started
+## Setup Instructions
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- UV package manager (recommended) or pip
+- Python 3.10 or higher
+- Pip (Python package installer)
 
 ### Installation
 
-1. **Clone or download this repository**
-   ```bash
-   git clone https://github.com/SympatiCog/labdata_fqm.git
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   cd labdata_fqm
-   
-   # Using UV (recommended; see https://docs.astral.sh/uv/getting-started/installation/)
-   uv sync
-   source .venv/bin/activate
-   
-   # Or in an existing python 3.11+ installation, you can use pip
-   pip install -r requirements.txt
-   ```
-
-3. **Test with synthetic data (optional)**
-   
-   To explore the interface without using real data:
-   ```bash
-   python generate_synthetic_data.py
-   streamlit run main.py -- --data-dir synthetic_data
-   ```
-
-### Quick Start
-
-```bash
-# Start the application with your data
-streamlit run main.py
-
-# Or with custom data directory
-streamlit run main.py -- --data-dir your_data_folder
-
-# Configure via TOML file (recommended for persistent settings)
-# Edit config.toml, then run:
-streamlit run main.py
-```
-
-**💡 Tip**: For persistent configuration, use the GUI configuration interface in the application sidebar or edit `config.toml` directly. CLI parameters are best for temporary overrides.
-
-## 🚀 What's New: Flexible Data Structure Support
-
-This application now **automatically adapts to your existing data** without requiring any file modifications:
-
-- **Auto-Detection**: Instantly recognizes cross-sectional vs longitudinal data formats
-- **Universal Column Support**: Works with any column naming convention (participant_id, SubjectID, ursi, etc.)
-- **Smart Merging**: Adapts merge strategy based on your data structure
-- **Legacy Compatibility**: Existing customID-based datasets work seamlessly
-- **Zero Configuration**: Just point to your data folder and run - no setup required!
-
-**Example**: Your data uses `participant_id` and `visit`? No problem:
-```bash
-streamlit run main.py -- --primary-id-column participant_id --session-column visit
-```
-
-## Data Setup
-
-The application automatically adapts to your data structure - no file modifications required!
-
-### Supported Data Formats
-
-**Cross-sectional Data**: One row per participant
-```csv
-participant_id,age,sex,score
-SUB001,25,1,85
-SUB002,30,2,90
-```
-
-**Longitudinal Data**: Multiple rows per participant across sessions
-```csv
-participant_id,session,age,sex,score
-SUB001,baseline,25,1,85
-SUB001,followup,25,1,88
-SUB002,baseline,30,2,90
-SUB002,followup,30,2,92
-```
-
-**Legacy Format**: Existing `customID` datasets (fully supported)
-```csv
-customID,age,sex,score
-SUB001_baseline,25,1,85
-SUB001_followup,25,1,88
-```
-
-### Quick Setup
-
-1. **Place your CSV files** in the `data/` directory (or specify custom directory)
-2. **Include a demographics file** as the primary table (default: `demographics.csv`)
-3. **Run the application** - it will auto-detect your column structure!
-
-```bash
-# Auto-detect everything (recommended)
-streamlit run main.py
-
-# Or specify your column names explicitly
-streamlit run main.py -- --primary-id-column participant_id --session-column timepoint
-```
-
-### Example Data Structure
-
-```
-data/
-├── demographics.csv      # Primary table (required)
-├── VO2max.csv           # Phenotypic data table
-├── woodcock_johnson.csv # Cognitive data table
-├── flanker.csv          # Behavioral data table
-└── ...                  # Additional data tables
-```
-
-### Data Requirements
-*
-- **Required**: Common identifier column across *all* CSV files
-- **Demographics table**: Primary table for joins (configurable name)
-- **Optional**: `age`, `sex` columns in demographics for filtering
-- **Automatic detection**: Longitudinal vs cross-sectional format
-- **RS1 format support**: Auto-detected multi-study datasets
-
-## Usage
-
-### Running the Application
-
-```bash
-# Start the Streamlit application (multipage interface)
-streamlit run main.py
-
-# Start Jupyter Lab for data analysis
-jupyter lab
-```
-
-The application now features a **multipage interface** with automatic sidebar navigation:
-
-- **🏠 Main Page**: Data query, filtering, and merging functionality
-- **📊 Data Profiling**: Comprehensive statistical analysis and reporting
-
-### Data Profiling Capabilities ✨
-
-The **Data Profiling** page provides comprehensive analysis of your research datasets:
-
-#### **Report Generation**
-- **Full Report**: Complete analysis with all statistical components
-- **Minimal Report**: Essential statistics only (recommended for large datasets)
-- **Explorative Report**: Extended analysis with detailed correlations and interactions
-
-#### **Performance Features**
-- **Smart Sampling**: Automatic sampling for datasets >5000 rows
-- **Configurable Sample Size**: Choose sample size from 1000-10000 rows
-- **Progress Indicators**: Real-time feedback during report generation
-
-#### **Analysis Components**
-- **Dataset Overview**: Shape, memory usage, data types
-- **Missing Values Analysis**: Patterns, percentages, and heatmaps
-- **Statistical Summaries**: Descriptive statistics for all variables
-- **Distribution Analysis**: Histograms and distribution plots
-- **Correlation Analysis**: Correlation matrices and scatter plots
-- **Data Quality Metrics**: Completeness, uniqueness, and validity checks
-
-#### **Export Options**
-- **HTML Reports**: Interactive, self-contained reports for sharing
-- **JSON Summaries**: Machine-readable analysis results
-- **Standalone Mode**: Upload CSV files directly for analysis
-
-#### **Using Data Profiling**
-1. **Generate data** on the main page using filters and table selection
-2. **Navigate** to the Data Profiling page via sidebar
-3. **Configure** report type and sample size (if needed)
-4. **Generate** comprehensive analysis report
-5. **Export** detailed reports for documentation or sharing
-
-### Command Line Configuration
-
-The application supports extensive runtime configuration via command line parameters. Use the double dash (`--`) separator when running with Streamlit:
-
-```bash
-# Auto-detect column names (recommended for most users)
-streamlit run main.py
-
-# Configure for different research data formats
-streamlit run main.py -- --primary-id-column participant_id --session-column visit
-streamlit run main.py -- --primary-id-column SubjectID --session-column Session --composite-id-column participantID
-
-# Configure data directory and file settings
-streamlit run main.py -- --data-dir custom_data --demographics-file my_demographics.csv
-
-# Set UI defaults and performance options
-streamlit run main.py -- --max-display-rows 100 --cache-ttl-seconds 300 --default-age-min 20 --default-age-max 70
-
-# View all available options and examples
-python main.py --help
-```
-
-#### Available CLI Parameters
-
-**Data Structure Configuration:**
-- `--primary-id-column`: Primary subject identifier column (default: 'ursi')
-  - Common names: `participant_id`, `subject_id`, `SubjectID`, `study_id`
-- `--session-column`: Session identifier for longitudinal data (default: 'session_num')
-  - Common names: `session`, `timepoint`, `visit`, `Visit`, `Session`
-- `--composite-id-column`: Generated composite ID column name (default: 'customID')
-
-**File and Directory Settings:**
-- `--data-dir`: Directory containing CSV data files (default: 'data')
-- `--demographics-file`: Demographics CSV filename (default: 'demographics.csv')
-- `--participant-id-column`: Legacy parameter for backward compatibility
-
-**UI and Performance:**
-- `--max-display-rows`: Maximum rows to display in preview (default: 50)
-- `--cache-ttl-seconds`: Cache time-to-live in seconds (default: 600)
-- `--default-age-min`: Default minimum age for age filter (default: 18)
-- `--default-age-max`: Default maximum age for age filter (default: 80)
-
-### Using the Interface
-
-The application displays your detected data structure at startup (cross-sectional vs longitudinal) and shows any dataset preparation actions taken.
-
-1. **Define Cohort Filters**:
-   - Set age range filters (if age column exists)
-   - Select sex categories (if sex column exists)
-   - Select studies and sessions (for multi-study data)
-   - Add phenotypic filters on numeric columns from any table
-   - **Live participant count** updates as you adjust filters
-
-2. **Select Data for Export**:
-   - Choose which tables to include in your merged dataset
-   - Select specific columns from each table
-   - Tables are added to the bottom of the selection list
-   - **Smart merging** uses appropriate strategy for your data format
-
-3. **Generate & Download**:
-   - **Enwiden by session** (longitudinal data only): Pivot data to wide format with session-specific columns
-   - Click "Generate Merged Data" to run the query
-   - Preview the first 50 rows of results
-   - Download the complete dataset as a CSV file
-   - Filename automatically reflects your filter settings and data format
-
-4. **Data Analysis** (New):
-   - Navigate to the **📊 Data Profiling** page
-   - Generate comprehensive statistical analysis reports
-   - Export detailed HTML/JSON reports for documentation
-   - Upload standalone CSV files for direct analysis
-
-## Configuration
-
-The application supports multiple configuration methods with a flexible hierarchy:
-
-### 📁 **TOML Configuration File** ✨ *Featured*
-
-The application uses a `config.toml` file for persistent configuration that survives application restarts:
-
-```toml
-# config.toml - Application Configuration
-data_dir = "data"
-demographics_file = "demographics.csv"
-primary_id_column = "ursi"
-session_column = "session_num"
-composite_id_column = "customID"
-default_age_min = 18
-default_age_max = 80
-
-[sex_mapping]
-Female = 1.0
-Male = 2.0
-Other = 3.0
-Unspecified = 0.0
-```
-
-**Configuration Parameters:**
-
-| Parameter | Description | Default | Example Values |
-|-----------|-------------|---------|----------------|
-| `data_dir` | Directory containing CSV files | `"data"` | `"my_study_data"`, `"/path/to/csvs"` |
-| `demographics_file` | Primary demographics CSV filename | `"demographics.csv"` | `"participants.csv"`, `"baseline.csv"` |
-| `primary_id_column` | Subject identifier column name | `"ursi"` | `"participant_id"`, `"SubjectID"` |
-| `session_column` | Session/timepoint column name | `"session_num"` | `"visit"`, `"timepoint"`, `"Session"` |
-| `composite_id_column` | Generated composite ID column | `"customID"` | `"participantID"`, `"unique_id"` |
-| `default_age_min` | Default minimum age filter | `18` | `0`, `21`, `65` |
-| `default_age_max` | Default maximum age filter | `80` | `25`, `100`, `120` |
-
-**Sex Mapping Configuration:**
-```toml
-[sex_mapping]
-Female = 1.0
-Male = 2.0
-Other = 3.0
-Unspecified = 0.0
-```
-
-### 🖥️ **GUI Configuration Interface** ✨ *Interactive*
-
-Access the configuration GUI through the application sidebar:
-
-#### **How to Use the GUI Configuration:**
-
-1. **Open Configuration Panel**: 
-   - Launch the application: `streamlit run main.py`
-   - Look for **"⚙️ Application Configuration"** in the sidebar
-   - Click to expand the configuration interface
-
-2. **Configure Settings Categories**:
-
-   **📁 File and Directory Settings:**
-   - **Data Directory**: Path to your CSV data files
-   - **Demographics File**: Filename of your primary demographics CSV
-
-   **🏷️ Column Name Settings:**
-   - **Primary ID Column**: Main subject identifier (e.g., `participant_id`, `ursi`)
-   - **Session Column**: Session/timepoint identifier for longitudinal data
-   - **Composite ID Column**: Name for generated composite identifiers
-
-   **🎚️ Default UI Settings:**
-   - **Default Min/Max Age**: Age filter ranges for the interface
-   - **Sex Mapping**: View current sex-to-numeric mappings (read-only in GUI)
-
-3. **Save and Apply**:
-   - Click **"Save Configuration"** to persist changes to `config.toml`
-   - Application automatically reloads with new settings
-   - Cache clearing handled automatically when needed
-
-#### **GUI Features:**
-- **Real-time Validation**: Input validation with helpful error messages
-- **Auto-save**: Changes persist across application sessions
-- **Cache Management**: Intelligent cache clearing when data structure changes
-- **Visual Feedback**: Success/error notifications for configuration changes
-- **Read-only Display**: Some advanced settings (like sex mapping) shown for reference
-
-### 💻 **Command Line Configuration**
-
-CLI parameters override both TOML and default settings (see [Command Line Configuration](#command-line-configuration) above).
-
-**Configuration Hierarchy** (highest to lowest priority):
-1. **Command Line Parameters** (temporary, session-only)
-2. **TOML Configuration File** (persistent)
-3. **Application Defaults** (built-in fallbacks)
-
-### 🔧 **Advanced Configuration**
-
-For advanced users, additional settings can be modified directly in the `Config` class in `main.py`:
-
-- `SEX_MAPPING`: Mapping of sex labels to numeric codes (also configurable via TOML)
-- `DEFAULT_AGE_RANGE`: Age slider range (default: 0-120)
-- `DEFAULT_FILTER_RANGE`: Default range for phenotypic filters (default: 0-100)
-- `SEX_OPTIONS`: Available sex options for UI selection
-- `SESSION_OPTIONS`: Available session options for filtering
-- `CACHE_TTL_SECONDS`: Cache duration for metadata (default: 600)
-- `MAX_DISPLAY_ROWS`: Maximum rows shown in data preview (default: 50)
-
-### 📋 **Configuration Examples**
-
-**Different Research Contexts:**
-
-```toml
-# Adult Psychology Study
-data_dir = "behavioral_data"
-primary_id_column = "participant_id"
-session_column = "session"
-default_age_min = 18
-default_age_max = 95
-
-# Clinical Trial
-data_dir = "clinical_trial"
-primary_id_column = "SubjectID"
-session_column = "Visit"
-demographics_file = "baseline_demographics.csv"
-
-# Pediatric Study
-data_dir = "pediatric_data"
-primary_id_column = "child_id"
-session_column = "timepoint"
-default_age_min = 5
-default_age_max = 17
-```
-
-## Architecture
-
-- **Frontend**: Streamlit multipage web interface with reactive components
-- **Backend**: DuckDB for in-memory SQL query processing
-- **Data Processing**: Pandas for CSV handling and data manipulation
-- **Data Analysis**: ydata-profiling for comprehensive statistical analysis
-- **Visualization**: Interactive plots and reports via streamlit-pandas-profiling
-- **Caching**: Streamlit caching for performance optimization
-- **Session Management**: Cross-page data sharing via Streamlit session state
-
-### Key Functions
-
-- `FlexibleMergeStrategy`: Auto-detects cross-sectional vs longitudinal data formats
-- `MergeKeys`: Encapsulates merge column information and dataset structure  
-- `get_table_info()`: Scans, analyzes, and prepares CSV files (cached for 10 minutes)
-- `generate_base_query_logic()`: Creates adaptive SQL JOIN and WHERE clauses
-- `render_*_filters()`: Modular UI components for different filter types
-- `validate_csv_structure()`: Ensures data integrity with flexible column requirements
-- `detect_rs1_format()`: Automatically detects multi-study format
-
-## Performance
-
-- **Optimized Loading**: Uses chunked reading for large files
-- **Smart Caching**: Metadata cached separately from full data
-- **Efficient Queries**: Parameterized SQL with DuckDB optimization
-- **Memory Management**: Minimal memory footprint for large datasets
-
-## Error Handling
-
-The application includes comprehensive error handling for:
-- Missing or malformed CSV files
-- Invalid data types and formats
-- Permission and file access issues
-- SQL query errors and edge cases
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/SympatiCog/labdata_fqm.git
+    cd labdata_fqm
+    ```
+
+2.  **Create and activate a virtual environment (recommended):**
+    ```bash
+    # For Unix/macOS
+    python3 -m venv .venv
+    source .venv/bin/activate
+
+    # For Windows
+    python -m venv .venv
+    .venv\Scripts\activate
+    ```
+
+3.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+## Running the Application
+
+1.  **Ensure your CSV data files are in a directory** (default is `data/` in the project root).
+    *   Create a `data` directory in the project root if it doesn't exist.
+    *   Place your CSV files inside. One file should be your main demographics table (e.g., `demographics.csv`).
+    *   The application will attempt to auto-detect participant IDs and session columns. You can customize these in `config.toml`.
+
+2.  **Run the Dash application:**
+    ```bash
+    python app.py
+    ```
+
+3.  **Open your web browser** and navigate to `http://127.0.0.1:8050/`.
+
+## Configuration (`config.toml`)
+
+The application uses a `config.toml` file for configuration. If this file does not exist when the application starts, it will be created automatically with default settings.
+
+**Key configuration options:**
+
+*   `DATA_DIR`: Path to your CSV data files (e.g., "data", "my_research_data/csvs").
+*   `DEMOGRAPHICS_FILE`: Filename of your primary demographics CSV (e.g., "demographics.csv").
+*   `PRIMARY_ID_COLUMN`: Default name for the primary subject identifier column (e.g., "ursi", "subject_id").
+*   `SESSION_COLUMN`: Default name for the session identifier column for longitudinal data (e.g., "session_num", "visit").
+*   `COMPOSITE_ID_COLUMN`: Default name for the column that will store the combined ID+Session for merging longitudinal data (e.g., "customID").
+*   `DEFAULT_AGE_SELECTION`: Default age range selected in the UI (e.g., `[18, 80]`).
+*   `SEX_MAPPING`: Mapping for 'sex' column values to numerical representations if needed by your data.
+
+You can edit `config.toml` directly to change these settings. The application reads this file on startup.
+
+## Project Structure
+
+*   `app.py`: Main Dash application entry point, defines the overall app layout and navbar.
+*   `pages/`: Directory containing individual page modules for the Dash app.
+    *   `query.py`: Logic and layout for the Data Query & Merge page.
+    *   `profiling.py`: Logic and layout for the Data Profiling page.
+*   `utils.py`: Utility functions, including data processing, query generation, and configuration management.
+*   `assets/`: Directory for CSS or JavaScript files (if any).
+*   `data/`: Default directory for user's CSV data files (can be changed in `config.toml`).
+*   `config.toml`: Configuration file (auto-generated if not present).
+*   `requirements.txt`: Python package dependencies.
+*   `README.md`: This file.
 
 ## Development
 
-### Code Structure
-
-- `main.py`: Main application with data query UI and business logic
-- `pages/02_📊_Data_Profiling.py`: Dedicated pandas profiling interface
-- `config.toml`: TOML configuration file for persistent application settings
-- `generate_synthetic_data.py`: Synthetic data generation for testing
-- `requirements.txt`: Python package dependencies
-- `pyproject.toml`: Project configuration and dependencies (includes ydata-profiling)
-- `CLAUDE.md`: Development guidelines for AI assistants
-
-### Dependencies
-
-**Core Requirements:**
-- `streamlit>=1.45.1`: Web application framework
-- `pandas>=2.3.0`: Data manipulation and analysis
-- `duckdb>=1.3.0`: Fast in-memory SQL processing
-- `toml>=0.10.2`: TOML configuration file parsing
-
-**Data Profiling (New):**
-- `ydata-profiling>=4.0.0`: Comprehensive dataset profiling and analysis
-- `streamlit-pandas-profiling>=0.1.3`: Streamlit integration for profiling reports
-
-**Development:**
-- `jupyterlab>=4.4.3`: Interactive development environment
-- `plotly>=6.1.2`: Interactive visualizations
-
-### Testing with Synthetic Data
-
-```bash
-# Generate synthetic test data
-python generate_synthetic_data.py
-
-# Run application with synthetic data
-streamlit run main.py -- --data-dir synthetic_data
-```
-
-### Development Commands
-
-```bash
-# Install dependencies
-uv sync
-
-# Run the Streamlit application
-streamlit run main.py
-
-# Start Jupyter Lab for data analysis
-jupyter lab
-```
+To set up for development, follow the installation instructions above.
+The application runs in debug mode by default when using `python app.py`, which enables hot-reloading.
 
 ## License
 
