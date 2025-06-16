@@ -1,10 +1,11 @@
-import pytest
-import toml
-import os
 import sys
 from pathlib import Path
-from main import Config # Assuming Config class is in main.py
-import main # Import the main module itself
+
+import pytest
+import toml
+
+import main  # Import the main module itself
+from main import Config  # Assuming Config class is in main.py
 
 # Store original hardcoded defaults from the Config class
 ORIGINAL_CONFIG_DEFAULTS = {
@@ -66,7 +67,6 @@ def manage_config_state(tmp_path, monkeypatch, mock_streamlit_fixture): # Uses r
     2. Temporarily sets CONFIG_FILE_PATH to a path within tmp_path.
     3. Cleans up the temporary config file if created.
     """
-    original_config_file_path_val = Config.CONFIG_FILE_PATH
 
     for key, value in ORIGINAL_CONFIG_DEFAULTS.items():
         if key == "CONFIG_FILE_PATH": # This will be monkeypatched specifically
@@ -136,7 +136,7 @@ def test_load_config_not_exists(manage_config_state):
     assert Config.SEX_MAPPING == original_sex_mapping
 
 
-    with open(test_config_path, "r") as f:
+    with open(test_config_path) as f:
         content = toml.load(f)
     assert content["data_dir"] == original_data_dir
     assert content["default_age_min"] == original_age_selection[0]
@@ -183,7 +183,6 @@ def test_load_config_calls_refresh_merge_detection(manage_config_state, monkeypa
         toml.dump({}, f)
 
     mock_refresh_called_count = 0
-    original_refresh_method = Config.refresh_merge_detection
     def mock_refresh():
         nonlocal mock_refresh_called_count
         mock_refresh_called_count +=1
@@ -212,7 +211,7 @@ def test_save_config_writes_current_attributes(manage_config_state, monkeypatch)
     Config.save_config()
 
     assert test_config_path.exists()
-    with open(test_config_path, "r") as f:
+    with open(test_config_path) as f:
         saved_content = toml.load(f)
 
     assert saved_content["data_dir"] == modified_data_dir
@@ -225,7 +224,8 @@ def test_save_config_uses_current_attributes_after_load(manage_config_state, mon
     test_config_path = Path(manage_config_state)
 
     initial_toml_values = { "data_dir": "initial_dir", "default_age_min": 20 }
-    with open(test_config_path, "w") as f: toml.dump(initial_toml_values, f)
+    with open(test_config_path, "w") as f:
+        toml.dump(initial_toml_values, f)
 
     Config.load_config()
     assert Config.DATA_DIR == "initial_dir"
@@ -240,7 +240,8 @@ def test_save_config_uses_current_attributes_after_load(manage_config_state, mon
 
     Config.save_config()
 
-    with open(test_config_path, "r") as f: saved_content = toml.load(f)
+    with open(test_config_path) as f:
+        saved_content = toml.load(f)
 
     assert saved_content["data_dir"] == programmatic_data_dir
     assert saved_content["default_age_min"] == programmatic_age_min
@@ -265,7 +266,8 @@ def test_cli_overrides_toml_config(manage_config_state, monkeypatch):
         "default_age_min": 22,
         "default_age_max": toml_age_max
     }
-    with open(test_config_path, "w") as f: toml.dump(toml_values, f)
+    with open(test_config_path, "w") as f:
+        toml.dump(toml_values, f)
 
     Config.load_config()
     assert Config.DATA_DIR == toml_data_dir
@@ -276,7 +278,6 @@ def test_cli_overrides_toml_config(manage_config_state, monkeypatch):
     cli_primary_id = "cli_pid_override"
     cli_age_min = 40
 
-    original_sys_argv = sys.argv
     simulated_argv = [
         "main.py",
         "--",
@@ -299,7 +300,7 @@ def test_config_file_path_is_managed(manage_config_state):
     assert Config.CONFIG_FILE_PATH == manage_config_state
     assert Path(manage_config_state).parent.exists() # tmp_path should exist
     assert Path(Config.CONFIG_FILE_PATH).name == "test_config.toml"
-    original_path_after_test = ORIGINAL_CONFIG_DEFAULTS["CONFIG_FILE_PATH"]
+    ORIGINAL_CONFIG_DEFAULTS["CONFIG_FILE_PATH"]
     # This assertion can't be made here directly as monkeypatch cleanup happens after test yield.
     # It's an implicit guarantee of monkeypatch.
     # print(f"Original path would be: {original_path_after_test}")

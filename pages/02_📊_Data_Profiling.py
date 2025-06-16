@@ -2,34 +2,34 @@
 Data Profiling Page - Comprehensive analysis of research datasets using pandas profiling
 """
 
-import streamlit as st
 import pandas as pd
-from ydata_profiling import ProfileReport
+import streamlit as st
 from streamlit_pandas_profiling import st_profile_report
+from ydata_profiling import ProfileReport
 
 st.title("📊 Data Profiling Report")
 st.markdown("Generate comprehensive statistical analysis and data quality reports for your research datasets.")
 
 # Check if we have data from the main query page
 if 'result_df' in st.session_state and st.session_state.result_df is not None and not st.session_state.result_df.empty:
-    
+
     # Display dataset info
     df = st.session_state.result_df
     st.info(f"**Dataset loaded:** {df.shape[0]} participants × {df.shape[1]} variables")
-    
+
     # Profiling options
     col1, col2 = st.columns([2, 1])
-    
+
     with col1:
         st.markdown("### Profiling Options")
-        
+
         # Report type selection
         report_type = st.selectbox(
             "Report Type",
             ["Full Report", "Minimal Report", "Explorative Report"],
             help="Full: Complete analysis (slow for large datasets), Minimal: Essential statistics only, Explorative: Extended analysis"
         )
-        
+
         # Sample size for large datasets
         if len(df) > 5000:
             use_sample = st.checkbox(
@@ -37,12 +37,12 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                 value=True,
                 help="For datasets >5000 rows, sampling improves performance"
             )
-            
+
             if use_sample:
                 sample_size = st.slider(
-                    "Sample size", 
-                    min_value=1000, 
-                    max_value=min(10000, len(df)), 
+                    "Sample size",
+                    min_value=1000,
+                    max_value=min(10000, len(df)),
                     value=min(5000, len(df)),
                     step=500
                 )
@@ -51,14 +51,14 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
         else:
             use_sample = False
             sample_size = len(df)
-    
+
     with col2:
         st.markdown("### Dataset Preview")
         st.dataframe(df.head(), use_container_width=True)
-    
+
     # Generate Report Button
     if st.button("🔍 Generate Profiling Report", type="primary"):
-        
+
         try:
             # Prepare dataset
             if use_sample and sample_size < len(df):
@@ -66,7 +66,7 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                 st.info(f"Analyzing sample of {sample_size} rows from {len(df)} total rows")
             else:
                 analysis_df = df
-            
+
             # Configure report settings based on selection
             config_settings = {}
             if report_type == "Minimal Report":
@@ -88,9 +88,9 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                     "minimal": len(analysis_df) > 1000,  # Auto-switch to minimal for large datasets
                     "explorative": len(analysis_df) <= 1000
                 }
-            
+
             with st.spinner("🔄 Generating profiling report... This may take a few minutes for large datasets."):
-                
+
                 # Create profile report
                 profile = ProfileReport(
                     analysis_df,
@@ -105,15 +105,15 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                     },
                     **config_settings
                 )
-                
+
                 # Display the report
                 st.success("✅ Report generated successfully!")
                 st_profile_report(profile)
-                
+
                 # Offer download option
                 st.markdown("---")
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     # Export to HTML
                     html_report = profile.to_html()
@@ -123,7 +123,7 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                         file_name=f"data_profiling_report_{len(analysis_df)}_participants.html",
                         mime="text/html"
                     )
-                
+
                 with col2:
                     # Export summary to JSON
                     json_report = profile.to_json()
@@ -133,10 +133,10 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                         file_name=f"data_profiling_summary_{len(analysis_df)}_participants.json",
                         mime="application/json"
                     )
-                
+
         except Exception as e:
             st.error(f"❌ Failed to generate profiling report: {str(e)}")
-            
+
             # Enhanced error handling
             error_msg = str(e).lower()
             if "memory" in error_msg or "ram" in error_msg:
@@ -149,28 +149,28 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                 st.info("""
                 **Troubleshooting Tips:**
                 1. Try using 'Minimal Report' for faster processing
-                2. Use a smaller sample size for large datasets  
+                2. Use a smaller sample size for large datasets
                 3. Check for columns with unusual data types
                 4. Some research data formats may need preprocessing
                 """)
-            
+
             # Provide basic statistics as fallback
             with st.expander("📋 Basic Dataset Statistics (Fallback)"):
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     st.write("**Dataset Overview:**")
                     st.metric("Total Rows", df.shape[0])
                     st.metric("Total Columns", df.shape[1])
                     st.metric("Memory Usage", f"{df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-                
+
                 with col2:
                     st.write("**Data Quality:**")
                     total_cells = df.shape[0] * df.shape[1]
                     missing_cells = df.isnull().sum().sum()
                     st.metric("Missing Values", f"{missing_cells:,} ({missing_cells/total_cells*100:.1f}%)")
                     st.metric("Complete Rows", f"{df.dropna().shape[0]:,}")
-                
+
                 st.write("**Column Information:**")
                 col_info = pd.DataFrame({
                     'Column': df.columns,
@@ -180,7 +180,7 @@ if 'result_df' in st.session_state and st.session_state.result_df is not None an
                     'Null %': (df.isnull().sum() / len(df) * 100).round(1)
                 })
                 st.dataframe(col_info, use_container_width=True)
-                
+
                 # Basic statistics for numeric columns
                 numeric_cols = df.select_dtypes(include=['number']).columns
                 if len(numeric_cols) > 0:
@@ -197,27 +197,27 @@ else:
     3. Click **"Generate Merged Data"** to create a dataset
     4. Return to this page to see the profiling options
     """)
-    
+
     # Option to upload a CSV file directly for profiling
     st.markdown("---")
     st.markdown("### Or Upload a CSV File Directly")
-    
+
     uploaded_file = st.file_uploader(
         "Choose a CSV file for profiling",
         type=['csv'],
         help="Upload any CSV file to generate a profiling report"
     )
-    
+
     if uploaded_file is not None:
         try:
             # Read the uploaded file
             df = pd.read_csv(uploaded_file)
             st.success(f"✅ File uploaded: {df.shape[0]} rows × {df.shape[1]} columns")
-            
+
             # Store in session state and rerun to show profiling options
             st.session_state.result_df = df
             st.rerun()
-            
+
         except Exception as e:
             st.error(f"❌ Error reading file: {str(e)}")
             st.info("Please ensure the file is a valid CSV format.")

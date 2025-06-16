@@ -3,7 +3,6 @@ import os
 import re
 import sys
 import time
-import toml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any, Optional
 import duckdb
 import pandas as pd
 import streamlit as st
+import toml
 
 
 # --- Merge Strategy Classes ---
@@ -28,7 +28,7 @@ class MergeKeys:
         if self.is_longitudinal:
             return self.composite_id if self.composite_id else self.primary_id
         return self.primary_id
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         return {
@@ -37,7 +37,7 @@ class MergeKeys:
             'composite_id': self.composite_id,
             'is_longitudinal': self.is_longitudinal
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'MergeKeys':
         """Create from dictionary for deserialization."""
@@ -124,7 +124,7 @@ class FlexibleMergeStrategy(MergeStrategy):
             # Only show error in UI if we're in a Streamlit context
             try:
                 st.error(f"Error detecting merge structure: {e}")
-            except:
+            except Exception:
                 pass  # Not in Streamlit context
             # Fallback to customID
             return MergeKeys(
@@ -273,7 +273,7 @@ class Config:
     def load_config(cls):
         """Loads configuration from TOML file, or creates it if it doesn't exist."""
         try:
-            with open(cls.CONFIG_FILE_PATH, 'r') as f:
+            with open(cls.CONFIG_FILE_PATH) as f:
                 config_data = toml.load(f)
 
             cls.DATA_DIR = config_data.get('data_dir', cls.DATA_DIR)
@@ -1069,7 +1069,7 @@ def render_file_upload_section(is_empty_state: bool = False) -> bool:
     """
     # For empty state, the header and intro text are now handled in render_empty_state_welcome()
     # This function focuses on the actual file upload functionality
-    
+
     if not is_empty_state:
         st.subheader("📁 Upload CSV Files")
         # Show requirements inline when inside another expander
@@ -1152,25 +1152,25 @@ def render_file_upload_section(is_empty_state: bool = False) -> bool:
         elif valid_file_summaries and invalid_file_summaries:
             # Partial validation - some files valid, some invalid
             st.warning(f"⚠️ {len(valid_file_summaries)} files passed validation, {len(invalid_file_summaries)} files failed")
-            
+
             st.info("**Valid files:**")
             for file_summary in valid_file_summaries:
                 st.write(f"✅ {file_summary['name']}")
-            
+
             st.error("**Invalid files:**")
             for file_summary in invalid_file_summaries:
                 st.write(f"❌ {file_summary['name']}")
-            
+
             # Option to continue with valid files only
             st.markdown("---")
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 proceed_with_partial_regular = st.button("📤 Upload Valid Files Only", type="secondary", key="upload_partial_regular")
-            
+
             with col2:
                 st.info("💡 **Tip:** You can upload additional CSV files at any time")
-            
+
             # Show save options if user chose to proceed with partial upload
             if proceed_with_partial_regular or st.session_state.get("show_partial_upload_regular", False):
                 st.session_state.show_partial_upload_regular = True
@@ -1198,7 +1198,7 @@ def render_empty_state_with_upload():
 
     # Two-column layout matching the design
     col1, col2 = st.columns([1, 1], gap="large")
-    
+
     with col1:
         st.markdown("## Getting Started")
         st.markdown("""
@@ -1216,7 +1216,7 @@ def render_empty_state_with_upload():
         - **Longitudinal:** `ursi, session_num, age, sex, ...`
         - **Rockland Sample1** (multi-session, multi-study): `ursi, session_num, all_studies, age, sex, ...`
         """)
-    
+
     with col2:
         st.markdown("## 📁 Upload CSV Files")
         st.markdown("""
@@ -1224,10 +1224,10 @@ def render_empty_state_with_upload():
 
         This tool helps you merge, filter, and export laboratory research data. To begin:
         1. Upload one or more CSV files below
-        2. Include a demographics file with participant information  
+        2. Include a demographics file with participant information
         3. Start exploring your data with filters and queries
         """)
-        
+
         # Move file format requirements to a collapsible section
         with st.expander("📋 File Format Requirements", expanded=False):
             st.markdown("""
@@ -1236,7 +1236,7 @@ def render_empty_state_with_upload():
             - Maximum 1000 columns per file
             - UTF-8 encoding recommended
             """)
-        
+
         # Integrate file upload directly in the right column
         render_file_upload_widget()
 
@@ -1244,7 +1244,7 @@ def render_file_upload_widget() -> bool:
     """
     Render just the file upload widget and processing logic.
     Used in the empty state right column.
-    
+
     Returns:
         bool: True if files were successfully uploaded and saved
     """
@@ -1318,25 +1318,25 @@ def render_file_upload_widget() -> bool:
         elif valid_file_summaries and invalid_file_summaries:
             # Partial validation - some files valid, some invalid
             st.warning(f"⚠️ {len(valid_file_summaries)} files passed validation, {len(invalid_file_summaries)} files failed")
-            
+
             st.info("**Valid files:**")
             for file_summary in valid_file_summaries:
                 st.write(f"✅ {file_summary['name']}")
-            
+
             st.error("**Invalid files:**")
             for file_summary in invalid_file_summaries:
                 st.write(f"❌ {file_summary['name']}")
-            
+
             # Option to continue with valid files only
             st.markdown("---")
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 proceed_with_partial = st.button("📤 Upload Valid Files Only", type="secondary", key="upload_partial_empty_state")
-            
+
             with col2:
                 st.info("💡 **Tip:** You can upload additional CSV files at any time after getting started")
-            
+
             # Show save options if user chose to proceed with partial upload
             if proceed_with_partial or st.session_state.get("show_partial_upload", False):
                 st.session_state.show_partial_upload = True
@@ -1355,17 +1355,17 @@ def render_file_upload_widget() -> bool:
 def _show_merge_compatibility_and_save_button(file_summaries: list[dict], button_key: str, show_in_expander: bool = False) -> bool:
     """
     Helper function to show merge compatibility check and save button.
-    
+
     Args:
         file_summaries: List of valid file summary dictionaries
         button_key: Unique key for the save button
         show_in_expander: Whether to show content in an expander (for partial uploads)
-    
+
     Returns:
         bool: True if files were successfully saved
     """
     files_uploaded = False
-    
+
     def show_content():
         # Show merge compatibility check
         has_demographics = any('demographics' in f['name'].lower() for f in file_summaries)
@@ -1404,13 +1404,13 @@ def _show_merge_compatibility_and_save_button(file_summaries: list[dict], button
                     # Small delay to let users see the success message
                     time.sleep(1)
                     st.rerun()
-    
+
     if show_in_expander:
         with st.expander("📋 Upload Summary & Save", expanded=True):
             show_content()
     else:
         show_content()
-    
+
     return files_uploaded
 
 def sync_table_order() -> None:
@@ -1806,7 +1806,7 @@ def main() -> None:
     # Handle empty state vs normal application flow
     con = get_db_connection()
     available_tables, demographics_columns, behavioral_columns_by_table, column_dtypes, column_ranges, merge_keys_dict, actions_taken, session_values, is_empty_state = get_table_info(con, Config.DATA_DIR)
-    
+
     # Convert merge_keys dictionary back to MergeKeys object
     merge_keys = MergeKeys.from_dict(merge_keys_dict)
 
