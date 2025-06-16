@@ -1449,16 +1449,16 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         cols = st.columns(len(Config.RS1_STUDY_COLUMNS))
         for i, study_col in enumerate(Config.RS1_STUDY_COLUMNS):
             with cols[i]:
-                # Initialize session state key if it doesn't exist
+                # Initialize session state key if it doesn't exist - preserve existing values
                 if f"study_{study_col}" not in st.session_state:
-                    st.session_state[f"study_{study_col}"] = True
+                    st.session_state[f"study_{study_col}"] = study_col in Config.DEFAULT_STUDY_SELECTION
                     
                 if st.checkbox(Config.RS1_STUDY_LABELS[study_col], value=st.session_state[f"study_{study_col}"], key=f"study_{study_col}"):
                     selected_studies.append(study_col)
 
         # Session Selection dropdown
         st.subheader("Session Selection")
-        # Initialize session state key if it doesn't exist
+        # Initialize session state key if it doesn't exist - preserve existing values
         if "session_selection" not in st.session_state:
             st.session_state.session_selection = Config.DEFAULT_SESSION_SELECTION
             
@@ -1475,7 +1475,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
     is_rockland = detect_rockland_format(demographics_columns)
     if is_rockland:
         st.subheader("Substudy Selection")
-        # Initialize session state key if it doesn't exist
+        # Initialize session state key if it doesn't exist - preserve existing values
         if "rockland_substudy_selection" not in st.session_state:
             st.session_state.rockland_substudy_selection = Config.DEFAULT_ROCKLAND_STUDIES
             
@@ -1491,7 +1491,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
     if merge_keys.is_longitudinal and session_values:
         # Dynamic session selection for longitudinal data
         st.subheader("Session Selection")
-        # Initialize session state key if it doesn't exist
+        # Initialize session state key if it doesn't exist - preserve existing values
         if "session_selection" not in st.session_state:
             st.session_state.session_selection = session_values
             
@@ -1508,7 +1508,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
 
     age_range = None
     if 'age' in demographics_columns:
-        # Initialize session state key if it doesn't exist
+        # Initialize session state key if it doesn't exist - preserve existing values
         if "demographic_age_range" not in st.session_state:
             st.session_state.demographic_age_range = Config.DEFAULT_AGE_SELECTION
         
@@ -1521,7 +1521,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
 
     selected_sex = []
     if 'sex' in demographics_columns:
-        # Initialize session state key if it doesn't exist
+        # Initialize session state key if it doesn't exist - preserve existing values
         if "demographic_sex_selection" not in st.session_state:
             st.session_state.demographic_sex_selection = Config.DEFAULT_SEX_SELECTION
             
@@ -1611,7 +1611,7 @@ def render_table_selection(available_tables: list[str], behavioral_columns_by_ta
     """Renders table and column selection UI and returns selected columns."""
     st.header("2. Select Data for Export")
 
-    # Initialize session state keys if they don't exist
+    # Initialize session state keys if they don't exist - preserve existing values
     if 'multiselect_key' not in st.session_state:
         st.session_state.multiselect_key = []
     if 'table_order' not in st.session_state:
@@ -1634,7 +1634,7 @@ def render_table_selection(available_tables: list[str], behavioral_columns_by_ta
         for table in tables_in_use:
             with st.expander(f"Columns for '{table}'", expanded=True):
                 all_cols = behavioral_columns_by_table.get(table, [])
-                # Initialize session state key if it doesn't exist
+                # Initialize session state key if it doesn't exist - preserve existing values
                 if f"cols_{table}" not in st.session_state:
                     st.session_state[f"cols_{table}"] = []
                     
@@ -1723,7 +1723,7 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
     # Add enwiden option for longitudinal data
     enwiden_data = False
     if merge_keys.is_longitudinal:
-        # Initialize session state key if it doesn't exist
+        # Initialize session state key if it doesn't exist - preserve existing values
         if "enwiden_by_session" not in st.session_state:
             st.session_state.enwiden_by_session = False
             
