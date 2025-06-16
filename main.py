@@ -1740,8 +1740,7 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
                     with col1:
                         st.info("📊 **Want detailed data analysis?** Generate comprehensive statistical reports and data quality analysis.")
                     with col2:
-                        if st.button("📊 Data Profiling", type="secondary", use_container_width=True):
-                            st.switch_page("pages/02_📊_Data_Profiling.py")
+                        st.page_link("pages/02_📊_Data_Profiling.py", label="📊 Data Profiling", use_container_width=True)
 
             except Exception as e:
                 st.error(f"An error occurred during the database query: {e}")
