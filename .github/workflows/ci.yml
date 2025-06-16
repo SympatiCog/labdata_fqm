@@ -92,7 +92,7 @@ jobs:
     
     - name: Upload coverage artifacts
       if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: coverage-report
         path: htmlcov/
@@ -194,7 +194,7 @@ jobs:
         python-version: "3.12"
     
     - name: Install uv
-      uses: actions/setup-uv@v3
+      uses: astral-sh/setup-uv@v6
       with:
         version: "latest"
     
