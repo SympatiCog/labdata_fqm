@@ -445,7 +445,7 @@ Config.load_config()
 
 # --- Page Setup ---
 st.set_page_config(
-    page_title="The Basic Scientist's Data Query Tool",
+    page_title="The Basic Scientist's Basic Data Query Tool",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -1169,7 +1169,7 @@ def render_empty_state_with_upload():
     """Render a complete empty state screen with integrated file upload."""
     st.markdown("""
     <div style="text-align: center; padding: 2rem;">
-        <h2>🔬 The Basic Scientist's Data Query and Merge Tool</h2>
+        <h2>🔬 The Basic Scientist's Basic Data Query Tool</h2>
         <p style="font-size: 1.2rem; color: #666;">
             Upload your CSV data files to start exploring and merging research datasets
         </p>
@@ -1537,7 +1537,7 @@ def render_behavioral_filters(all_filterable_tables: list[str], demographics_col
                 )
 
             st.button(
-                "Remove",
+                "Remove Filter",
                 key=f"remove_behavioral_filter_{behavioral_filter['id']}",
                 on_click=remove_behavioral_filter,
                 args=(behavioral_filter['id'],)
@@ -1780,7 +1780,7 @@ def main() -> None:
         return  # Exit early - don't show the main interface
 
     # Normal application flow with data
-    st.title("🔬 The Basic Scientist's Data Query and Merge Tool")
+    st.title("🔬 The Basic Scientist's Basic Data Query Tool")
 
     # Initialize session state
     if 'table_order' not in st.session_state:
@@ -1843,9 +1843,9 @@ def main() -> None:
         if count_query:
             # print(count_query, count_params)  ## DEBUG
             count_result = con.execute(count_query, count_params).fetchone()[0]
-            count_placeholder.metric("Matching Participants", count_result)
+            count_placeholder.metric("Matching Rows", count_result)
         else:
-            count_placeholder.metric("Matching Participants", "N/A")
+            count_placeholder.metric("Matching Rows", "N/A")
 
     with col2:
         # Table and column selection
