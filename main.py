@@ -12,6 +12,7 @@ from typing import Any, Optional
 import duckdb
 import pandas as pd
 import streamlit as st
+import pygwalker as pyg
 
 
 # --- Merge Strategy Classes ---
@@ -1709,6 +1710,13 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
                     suggested_filename,
                     'text/csv'
                 )
+
+                st.session_state.result_df = result_df.copy()
+                if st.button("Visualize with PyGWalker", key="viz_btn"):
+                    st.session_state.show_pygwalker = True
+
+                if 'show_pygwalker' in st.session_state and st.session_state.show_pygwalker and 'result_df' in st.session_state:
+                    pyg.walk(st.session_state.result_df, env='Streamlit')
 
             except Exception as e:
                 st.error(f"An error occurred during the database query: {e}")

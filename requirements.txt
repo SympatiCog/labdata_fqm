@@ -7,6 +7,7 @@ toml
 
 # Development and analysis tools
 # jupyterlab>=4.4.3
+pygwalker>=0.1
 
 # Standard library modules (included with Python)
 # - os
