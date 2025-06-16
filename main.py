@@ -1690,9 +1690,14 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
                 st.success(f"✅ Query completed in {end_time - start_time:.2f} seconds.")
                 st.subheader("Query Results")
                 st.write(f"**Total matching participants found:** {len(result_df)}{transform_info}")
+
                 st.dataframe(result_df.head(Config.MAX_DISPLAY_ROWS))
 
                 csv = result_df.to_csv(index=False).encode('utf-8')
+
+                # Store the definitive result_df in session state for PyGWalker
+                if not result_df.empty:
+                    st.session_state.result_df = result_df.copy()
                 filename_parts = [
                     'data',
                     f"age{age_range[0]}-{age_range[1]}" if age_range else '',
@@ -1711,12 +1716,17 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
                     'text/csv'
                 )
 
-                st.session_state.result_df = result_df.copy()
-                if st.button("Visualize with PyGWalker", key="viz_btn"):
-                    st.session_state.show_pygwalker = True
+                # --- PyGWalker Button Integration Start ---
+                if 'result_df' in st.session_state and st.session_state.result_df is not None and not st.session_state.result_df.empty:
+                    if st.button("Visualize with PyGWalker", key="toggle_pygwalker_viz"):
+                        if 'pygwalker_visible' not in st.session_state:
+                            st.session_state.pygwalker_visible = False  # Initialize if it doesn't exist
+                        st.session_state.pygwalker_visible = not st.session_state.pygwalker_visible
 
-                if 'show_pygwalker' in st.session_state and st.session_state.show_pygwalker and 'result_df' in st.session_state:
-                    pyg.walk(st.session_state.result_df, env='Streamlit')
+                    if st.session_state.get('pygwalker_visible', False):
+                        st.markdown("### PyGWalker Visualization")
+                        pyg.walk(st.session_state.result_df, env='Streamlit')
+                # --- PyGWalker Button Integration End ---
 
             except Exception as e:
                 st.error(f"An error occurred during the database query: {e}")
