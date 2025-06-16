@@ -1453,7 +1453,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
                 if f"study_{study_col}" not in st.session_state:
                     st.session_state[f"study_{study_col}"] = True
                     
-                if st.checkbox(Config.RS1_STUDY_LABELS[study_col], key=f"study_{study_col}"):
+                if st.checkbox(Config.RS1_STUDY_LABELS[study_col], value=st.session_state[f"study_{study_col}"], key=f"study_{study_col}"):
                     selected_studies.append(study_col)
 
         # Session Selection dropdown
@@ -1465,6 +1465,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         selected_sessions = st.multiselect(
             "Select Sessions",
             options=Config.SESSION_OPTIONS,
+            default=st.session_state.session_selection,
             key="session_selection"
         )
         st.markdown("---")
@@ -1481,6 +1482,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         selected_substudies = st.multiselect(
             "Select Base Studies",
             options=Config.ROCKLAND_BASE_STUDIES,
+            default=st.session_state.rockland_substudy_selection,
             key="rockland_substudy_selection",
             help="Select which base studies to include in the dataset"
         )
@@ -1496,6 +1498,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         selected_sessions = st.multiselect(
             f"Select {merge_keys.session_id} Values",
             options=session_values,
+            default=st.session_state.session_selection,
             key="session_selection"
         )
         st.markdown("---")
@@ -1512,6 +1515,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         age_range = st.slider(
             "Select Age Range",
             *Config.DEFAULT_AGE_RANGE,
+            value=st.session_state.demographic_age_range,
             key="demographic_age_range"
         )
 
@@ -1524,6 +1528,7 @@ def render_demographic_filters(demographics_columns: list[str], merge_keys: Merg
         selected_sex = st.multiselect(
             "Select Sex",
             Config.SEX_OPTIONS,
+            default=st.session_state.demographic_sex_selection,
             key="demographic_sex_selection"
         )
 
@@ -1615,6 +1620,7 @@ def render_table_selection(available_tables: list[str], behavioral_columns_by_ta
     st.multiselect(
         "Choose tables to merge:",
         options=available_tables,
+        default=st.session_state.multiselect_key,
         key='multiselect_key',
         on_change=sync_table_order
     )
@@ -1635,6 +1641,7 @@ def render_table_selection(available_tables: list[str], behavioral_columns_by_ta
                 selected_columns_per_table[table] = st.multiselect(
                     f"Select columns from {table}",
                     options=all_cols,
+                    default=st.session_state[f"cols_{table}"],
                     key=f"cols_{table}"
                 )
 
@@ -1722,6 +1729,7 @@ def render_results_section(base_query_for_count: str, params_for_count: list[Any
             
         enwiden_data = st.checkbox(
             "Enwiden by session",
+            value=st.session_state.enwiden_by_session,
             help="Pivot data so each subject has one row with session-specific columns (e.g., age_BAS1, age_BAS2)",
             key="enwiden_by_session"
         )
