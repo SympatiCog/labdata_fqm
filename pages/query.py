@@ -1,8 +1,12 @@
 import dash
-from dash import html, dcc, callback, Input, Output, State
+from dash import html, dcc, callback, Input, Output, State, dash_table, no_update
 import dash_bootstrap_components as dbc
 import base64 # For decoding file contents
 import io # For converting bytes to file-like object for pandas
+import json # For JSON parsing
+import logging
+import duckdb
+import pandas as pd
 
 # Assuming utils.py is in the same directory or accessible in PYTHONPATH
 from utils import (
@@ -10,8 +14,14 @@ from utils import (
     MergeKeys,
     validate_csv_file,
     save_uploaded_files_to_data_dir,
-    get_table_info
-    # Add other necessary functions/classes from utils.py as needed
+    get_table_info,
+    detect_rs1_format,
+    detect_rockland_format,
+    is_numeric_column,
+    generate_base_query_logic,
+    generate_count_query,
+    generate_data_query,
+    enwiden_longitudinal_data
 )
 
 dash.register_page(__name__, path='/', title='Query Data')
@@ -43,16 +53,9 @@ layout = dbc.Container([
             ),
             html.Div(id='upload-status'), # To display messages about file uploads
             dcc.Store(id='upload-trigger-store'), # To trigger updates after successful uploads
-            dcc.Store(id='available-tables-store'),
-            dcc.Store(id='demographics-columns-store'),
-            dcc.Store(id='behavioral-columns-store'),
-            dcc.Store(id='column-dtypes-store'),
-            dcc.Store(id='column-ranges-store'),
-            dcc.Store(id='merge-keys-store'),
-            dcc.Store(id='session-values-store'),
-            dcc.Store(id='all-messages-store'), # For general errors/info from get_table_info
-            dcc.Store(id='merged-dataframe-store', storage_type='session'), # For sharing with profiling page
+# All persistent stores are now defined in the main app layout for cross-page access
             dcc.Store(id='rs1-checkbox-ids-store'), # To store IDs of dynamically generated RS1 checkboxes
+            dash_table.DataTable(id='data-preview-table', style_table={'display': 'none'})
         ], width=12)
     ]),
     dbc.Row([
@@ -90,19 +93,43 @@ layout = dbc.Container([
                 html.H4("Phenotypic Filters", className="card-title"),
                 dbc.Button("Add Phenotypic Filter", id='add-phenotypic-filter-button', n_clicks=0, className="mb-3"),
                 html.Div(id='phenotypic-filter-list'),
-                dcc.Store(id='phenotypic-filters-state-store', data=[]),
             ]), style={'marginTop': '20px'}),
 
         ], md=6), # Left column for filters
         dbc.Col([
             html.H3("Select Data for Export"),
-            html.Div(id='table-column-selector-container'), # Placeholder for table/column selection
+            html.Div([
+                html.H4("Select Tables:"),
+                dcc.Dropdown(
+                    id='table-multiselect',
+                    multi=True,
+                    placeholder="Select tables for export..."
+                ),
+                html.Div(id='column-selection-area'),
+                html.Div([
+                    dbc.Checkbox(
+                        id='enwiden-data-checkbox',
+                        label='Enwiden longitudinal data (pivot sessions to columns)',
+                        value=False
+                    )
+                ], id='enwiden-checkbox-wrapper', style={'display': 'none', 'marginTop': '10px'})
+            ], id='table-column-selector-container')
         ], md=6) # Right column for selections
     ]),
     dbc.Row([
         dbc.Col([
             html.H3("Query Results"),
-            html.Div(id='results-container'), # Placeholder for results display
+            html.Div([
+                dbc.Button(
+                    "Generate Merged Data",
+                    id='generate-data-button',
+                    n_clicks=0,
+                    color="primary",
+                    className="mb-3"
+                ),
+                html.Div(id='data-preview-area'),
+                dcc.Download(id='download-dataframe-csv')
+            ], id='results-container')
         ], width=12)
     ])
 ], fluid=True)
@@ -117,13 +144,15 @@ layout = dbc.Container([
      Output('age-slider', 'disabled'),
      Output('age-slider-info', 'children')],
     [Input('demographics-columns-store', 'data'),
-     Input('column-ranges-store', 'data')]
+     Input('column-ranges-store', 'data')],
+    [State('age-slider-state-store', 'data')]
 )
-def update_age_slider(demo_cols, col_ranges):
+def update_age_slider(demo_cols, col_ranges, stored_age_value):
     if not demo_cols or 'age' not in demo_cols or not col_ranges:
         return 0, 100, [0, 100], {}, True, "Age filter disabled: 'age' column not found in demographics or ranges not available."
 
-    age_col_key = f"{config.get_demographics_table_name()}.age" # Construct the key for column_ranges
+    # Use 'demo' as the alias for demographics table, consistent with get_table_alias() in utils.py
+    age_col_key = "demo.age" # Construct the key for column_ranges
 
     if age_col_key in col_ranges:
         min_age, max_age = col_ranges[age_col_key]
@@ -131,8 +160,16 @@ def update_age_slider(demo_cols, col_ranges):
         max_age = int(max_age)
 
         default_min, default_max = config.DEFAULT_AGE_SELECTION
-        # Ensure default selection is within actual data range
-        value = [max(min_age, default_min), min(max_age, default_max)]
+        
+        # Use stored value if available and valid, otherwise use default
+        if stored_age_value is not None and len(stored_age_value) == 2:
+            stored_min, stored_max = stored_age_value
+            if min_age <= stored_min <= max_age and min_age <= stored_max <= max_age:
+                value = stored_age_value
+            else:
+                value = [max(min_age, default_min), min(max_age, default_max)]
+        else:
+            value = [max(min_age, default_min), min(max_age, default_max)]
 
         marks = {i: str(i) for i in range(min_age, max_age + 1, 10)}
         if min_age not in marks: marks[min_age] = str(min_age)
@@ -148,24 +185,31 @@ def update_age_slider(demo_cols, col_ranges):
     [Output('sex-dropdown', 'options'),
      Output('sex-dropdown', 'value'),
      Output('sex-dropdown', 'disabled')],
-    [Input('demographics-columns-store', 'data')]
+    [Input('demographics-columns-store', 'data')],
+    [State('sex-dropdown-state-store', 'data')]
 )
-def update_sex_dropdown(demo_cols):
+def update_sex_dropdown(demo_cols, stored_sex_value):
     if not demo_cols or 'sex' not in demo_cols:
         return [], None, True
 
     # Options from config.SEX_OPTIONS
     options = [{'label': s, 'value': s} for s in config.SEX_OPTIONS]
-    return options, config.DEFAULT_SEX_SELECTION, False
+    
+    # Use stored value if available, otherwise use default
+    value = stored_sex_value if stored_sex_value is not None else config.DEFAULT_SEX_SELECTION
+    return options, value, False
 
 # Callback to populate dynamic demographic filters (RS1, Rockland, Sessions)
 @callback(
     Output('dynamic-demo-filters-placeholder', 'children'),
     [Input('demographics-columns-store', 'data'),
      Input('session-values-store', 'data'),
-     Input('merge-keys-store', 'data')]
+     Input('merge-keys-store', 'data')],
+    [State('rockland-substudy-store', 'data'),
+     State('session-selection-store', 'data')]
 )
-def update_dynamic_demographic_filters(demo_cols, session_values, merge_keys_dict):
+def update_dynamic_demographic_filters(demo_cols, session_values, merge_keys_dict, 
+                                     stored_rockland_values, stored_session_values):
     if not demo_cols:
         return html.P("Demographic information not yet available to populate dynamic filters.")
 
@@ -187,12 +231,14 @@ def update_dynamic_demographic_filters(demo_cols, session_values, merge_keys_dic
 
     # Rockland Substudy Filters
     if detect_rockland_format(demo_cols): # utils.detect_rockland_format
-        children.append(html.H5("Rockland Substudy Selection", style={'marginTop': '15px'}))
+        children.append(html.H5("Substudy Selection", style={'marginTop': '15px'}))
+        # Use stored values if available, otherwise use default
+        rockland_value = stored_rockland_values if stored_rockland_values else config.DEFAULT_ROCKLAND_STUDIES
         children.append(
             dcc.Dropdown(
                 id='rockland-substudy-dropdown',
                 options=[{'label': s, 'value': s} for s in config.ROCKLAND_BASE_STUDIES],
-                value=config.DEFAULT_ROCKLAND_STUDIES,
+                value=rockland_value,
                 multi=True,
                 placeholder="Select Rockland substudies..."
             )
@@ -203,11 +249,13 @@ def update_dynamic_demographic_filters(demo_cols, session_values, merge_keys_dic
         mk = MergeKeys.from_dict(merge_keys_dict)
         if mk.is_longitudinal and mk.session_id and session_values:
             children.append(html.H5(f"{mk.session_id} Selection", style={'marginTop': '15px'}))
+            # Use stored values if available, otherwise default to all available sessions
+            session_value = stored_session_values if stored_session_values else session_values
             children.append(
                 dcc.Dropdown(
                     id='session-dropdown',
                     options=[{'label': s, 'value': s} for s in session_values],
-                    value=session_values, # Default to all available sessions
+                    value=session_value,
                     multi=True,
                     placeholder=f"Select {mk.session_id} values..."
                 )
@@ -217,6 +265,24 @@ def update_dynamic_demographic_filters(demo_cols, session_values, merge_keys_dic
         return html.P("No dataset-specific demographic filters applicable.", style={'fontStyle': 'italic'})
 
     return children
+
+
+# Callbacks to update stores when dynamic dropdowns change
+@callback(
+    Output('rockland-substudy-store', 'data'),
+    Input('rockland-substudy-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def update_rockland_substudy_store(rockland_values):
+    return rockland_values if rockland_values else []
+
+@callback(
+    Output('session-selection-store', 'data'),
+    Input('session-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def update_session_selection_store(session_values):
+    return session_values if session_values else []
 
 
 # Callbacks for Phenotypic Filters
@@ -335,7 +401,11 @@ def manage_phenotypic_filters_state(add_clicks, remove_clicks, current_filters):
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
     if button_id == 'add-phenotypic-filter-button':
-        new_filter_id = add_clicks # Simple way to get a unique ID for this session
+        # Generate a unique ID by finding the max existing ID and adding 1
+        existing_ids = [f['id'] for f in current_filters] if current_filters else []
+        max_id = max(existing_ids) if existing_ids else 0
+        new_filter_id = max_id + 1
+        
         new_filter = {
             'id': new_filter_id,
             'table': None,
@@ -346,7 +416,7 @@ def manage_phenotypic_filters_state(add_clicks, remove_clicks, current_filters):
         current_filters.append(new_filter)
     else: # Must be a remove button
         try:
-            clicked_button_dict = dash.json.loads(button_id)
+            clicked_button_dict = json.loads(button_id)
             if isinstance(clicked_button_dict, dict) and clicked_button_dict.get('type') == 'remove-pheno-filter-button':
                 filter_id_to_remove = clicked_button_dict['index']
                 current_filters = [f for f in current_filters if f['id'] != filter_id_to_remove]
@@ -448,16 +518,19 @@ def update_pheno_range_slider(selected_column, selected_table, col_ranges, filte
 )
 def update_single_phenotypic_filter_in_store(tables, columns, ranges, current_filters_state):
     ctx = dash.callback_context
-    if not ctx.triggered_inputs or not current_filters_state:
+    if not ctx.triggered or not current_filters_state:
         return dash.no_update
 
     # Determine which input triggered the callback
-    triggered_input_str = list(ctx.triggered_inputs.keys())[0]
-    triggered_value = list(ctx.triggered_inputs.values())[0]
+    triggered_prop_id = ctx.triggered[0]['prop_id']
+    triggered_value = ctx.triggered[0]['value']
+    
+    # Extract the component ID part (before the .value)
+    triggered_input_str = triggered_prop_id.split('.')[0]
 
     try:
         # The input ID is a stringified JSON (e.g., '{"index":1,"type":"pheno-table-dropdown"}')
-        triggered_id_dict = dash.json.loads(triggered_input_str)
+        triggered_id_dict = json.loads(triggered_input_str)
         filter_idx = triggered_id_dict['index'] # This is the 'id' of the filter
         prop_type = triggered_id_dict['type']
 
@@ -497,8 +570,8 @@ def update_single_phenotypic_filter_in_store(tables, columns, ranges, current_fi
     [Input('age-slider', 'value'),
      Input('sex-dropdown', 'value'),
      Input({'type': 'rs1-study-checkbox', 'index': dash.ALL}, 'value'), # For RS1 studies
-     Input('rockland-substudy-dropdown', 'value'), # For Rockland substudies
-     Input('session-dropdown', 'value'), # For general sessions
+     Input('rockland-substudy-store', 'data'), # For Rockland substudies
+     Input('session-selection-store', 'data'), # For session filtering
      Input('phenotypic-filters-state-store', 'data'),
      # Data stores needed for query generation
      Input('merge-keys-store', 'data'),
@@ -506,7 +579,9 @@ def update_single_phenotypic_filter_in_store(tables, columns, ranges, current_fi
 )
 def update_live_participant_count(
     age_range, selected_sex,
-    rs1_study_values, rockland_substudy_values, session_values, # These come from dynamic demographic filters
+    rs1_study_values, # RS1 studies from dynamic checkboxes
+    rockland_substudy_values, # Rockland substudies from store
+    session_values, # Session values from store
     phenotypic_filters_state,
     merge_keys_dict, available_tables
 ):
@@ -542,8 +617,11 @@ def update_live_participant_count(
     if selected_rs1_studies:
         demographic_filters['studies'] = selected_rs1_studies
 
+    # Handle Rockland substudy filtering
     if rockland_substudy_values:
         demographic_filters['substudies'] = rockland_substudy_values
+        
+    # Handle session filtering
     if session_values:
         demographic_filters['sessions'] = session_values
 
@@ -582,7 +660,7 @@ def update_live_participant_count(
                 count_result = con.execute(count_query, count_params).fetchone()
 
             if count_result and count_result[0] is not None:
-                return dbc.Alert(f"Matching Participants: {count_result[0]}", color="success")
+                return dbc.Alert(f"Matching Rows: {count_result[0]}", color="success")
             else:
                 return dbc.Alert("Could not retrieve participant count.", color="warning")
         else:
@@ -741,6 +819,28 @@ def update_table_multiselect_options(available_tables_data):
     return [{'label': table, 'value': table} for table in available_tables_data]
 
 @callback(
+    Output('table-multiselect', 'value', allow_duplicate=True),
+    Input('available-tables-store', 'data'),
+    State('table-multiselect-state-store', 'data'),
+    prevent_initial_call=True
+)
+def restore_table_multiselect_value(available_tables_data, stored_value):
+    if stored_value is not None:
+        return stored_value
+    return []
+
+@callback(
+    Output('enwiden-data-checkbox', 'value', allow_duplicate=True),
+    Input('merge-keys-store', 'data'),
+    State('enwiden-data-checkbox-state-store', 'data'),
+    prevent_initial_call=True
+)
+def restore_enwiden_checkbox_value(merge_keys_dict, stored_value):
+    if stored_value is not None:
+        return stored_value
+    return False
+
+@callback(
     Output('column-selection-area', 'children'),
     Input('table-multiselect', 'value'), # List of selected table names
     State('demographics-columns-store', 'data'),
@@ -807,14 +907,13 @@ def update_column_selection_area(selected_tables, demo_cols, behavioral_cols, me
 )
 def update_selected_columns_store(all_column_values, all_column_ids, current_stored_data):
     ctx = dash.callback_context
-    if not ctx.triggered and not current_stored_data: # If nothing triggered and store is empty, do nothing
-        return dash.no_update
-
+    
     # Make a copy to modify, or initialize if None
     updated_selections = current_stored_data.copy() if current_stored_data else {}
 
-    # If callback was triggered by a specific dropdown changing
-    if ctx.triggered:
+    # Only update if callback was actually triggered by user interaction
+    # This prevents overwriting stored data on initial page load
+    if ctx.triggered and all_column_ids and all_column_values:
         for i, component_id_dict in enumerate(all_column_ids):
             table_name = component_id_dict['table']
             selected_cols_for_table = all_column_values[i]
@@ -827,6 +926,9 @@ def update_selected_columns_store(all_column_values, all_column_ids, current_sto
                 # However, the update_column_selection_area callback should remove the dropdown.
                 # If a user manually clears a dropdown, it becomes an empty list.
                 pass # No change if value is None and table already existed or didn't.
+    else:
+        # Return no_update to preserve stored data when callback isn't triggered by user interaction
+        return no_update
 
     # This ensures that if a table is deselected from 'table-multiselect',
     # its column selections are removed from the store.
@@ -851,32 +953,32 @@ def update_enwiden_checkbox_visibility(merge_keys_dict):
             return {'display': 'block', 'marginTop': '10px'} # Show
     return {'display': 'none'} # Hide
 
-# Callback for Data Generation and Download
+# Callback for Data Generation
 @callback(
     [Output('data-preview-area', 'children'),
-     Output('download-dataframe-csv', 'data'),
      Output('merged-dataframe-store', 'data')], # Store for profiling page
     Input('generate-data-button', 'n_clicks'),
     [State('age-slider', 'value'),
      State('sex-dropdown', 'value'),
      State({'type': 'rs1-study-checkbox', 'index': dash.ALL}, 'value'),
-     State('rockland-substudy-dropdown', 'value'),
-     State('session-dropdown', 'value'),
+     State('rockland-substudy-store', 'data'),
+     State('session-selection-store', 'data'),
      State('phenotypic-filters-state-store', 'data'),
      State('selected-columns-per-table-store', 'data'),
-     State('enwiden-data-checkbox', 'value'), # List of checked values (e.g., ['on'] or [])
+     State('enwiden-data-checkbox', 'value'), # Boolean value (True when checked, False when unchecked)
      State('merge-keys-store', 'data'),
      State('available-tables-store', 'data'), # Needed for tables_to_join logic
      State('table-multiselect', 'value')] # Explicitly selected tables for export
 )
 def handle_generate_data(
     n_clicks,
-    age_range, selected_sex, rs1_study_values, rockland_substudy_values, session_filter_values,
+    age_range, selected_sex, rs1_study_values,
+    rockland_substudy_values, session_filter_values,
     phenotypic_filters_state, selected_columns_per_table,
     enwiden_checkbox_value, merge_keys_dict, available_tables, tables_selected_for_export
 ):
     if n_clicks == 0 or not merge_keys_dict:
-        return dbc.Alert("Click 'Generate Merged Data' after selecting filters and columns.", color="info"), None, None
+        return dbc.Alert("Click 'Generate Merged Data' after selecting filters and columns.", color="info"), None
 
     current_config = Config() # Load current config
     merge_keys = MergeKeys.from_dict(merge_keys_dict)
@@ -916,14 +1018,20 @@ def handle_generate_data(
      # This is now handled by taking rs1_checkbox_ids_store as State.
 
     # Correctly accessing RS1 study selections:
-    rs1_checkbox_ids = rs1_checkbox_ids_store if rs1_checkbox_ids_store else []
-    if rs1_study_values and len(rs1_study_values) == len(rs1_checkbox_ids):
-        selected_rs1_studies = [rs1_checkbox_ids[i] for i, checked in enumerate(rs1_study_values) if checked]
+    # For now, get the study names from config based on checkbox values
+    if rs1_study_values:
+        study_cols = list(config.RS1_STUDY_LABELS.keys())
+        selected_rs1_studies = [study_cols[i] for i, checked in enumerate(rs1_study_values) if i < len(study_cols) and checked]
         if selected_rs1_studies:
             demographic_filters['studies'] = selected_rs1_studies
 
-    if rockland_substudy_values: demographic_filters['substudies'] = rockland_substudy_values
-    if session_filter_values: demographic_filters['sessions'] = session_filter_values
+    # Handle Rockland substudy filtering
+    if rockland_substudy_values:
+        demographic_filters['substudies'] = rockland_substudy_values
+        
+    # Handle session filtering
+    if session_filter_values:
+        demographic_filters['sessions'] = session_filter_values
 
     # --- Phenotypic Filters ---
     active_phenotypic_filters = [
@@ -938,11 +1046,12 @@ def handle_generate_data(
     for p_filter in active_phenotypic_filters: # Add tables from active phenotypic filters
         tables_for_query.add(p_filter['table'])
 
-    if merge_keys.is_longitudinal and demographic_filters.get('sessions') and \
-       len(tables_for_query.intersection(set(available_tables if available_tables else []))) == 0 and \
-       current_config.get_demographics_table_name() in tables_for_query and \
-       len(tables_for_query) == 1 and available_tables:
-        tables_for_query.add(available_tables[0]) # Add a behavioral table if needed for session join
+    # Note: Session-based table selection logic would go here when session filters are available
+    # if merge_keys.is_longitudinal and demographic_filters.get('sessions') and \
+    #    len(tables_for_query.intersection(set(available_tables if available_tables else []))) == 0 and \
+    #    current_config.get_demographics_table_name() in tables_for_query and \
+    #    len(tables_for_query) == 1 and available_tables:
+    #     tables_for_query.add(available_tables[0]) # Add a behavioral table if needed for session join
 
     # --- Selected Columns for Query ---
     # If no columns are selected for a table in tables_selected_for_export, select all its non-ID columns.
@@ -967,21 +1076,21 @@ def handle_generate_data(
         )
 
         if not data_query:
-            return dbc.Alert("Could not generate data query.", color="warning"), None, None
+            return dbc.Alert("Could not generate data query.", color="warning"), None
 
         with duckdb.connect(database=':memory:', read_only=False) as con:
             result_df = con.execute(data_query, data_params).fetchdf()
 
         original_row_count = len(result_df)
 
-        if enwiden_checkbox_value and 'on' in enwiden_checkbox_value and merge_keys.is_longitudinal:
+        if enwiden_checkbox_value and merge_keys.is_longitudinal:
             result_df = enwiden_longitudinal_data(result_df, merge_keys)
             enwiden_info = f" (enwidened from {original_row_count} rows to {len(result_df)} rows)"
         else:
             enwiden_info = ""
 
         if result_df.empty:
-            return dbc.Alert("No data found for the selected criteria.", color="info"), None, None
+            return dbc.Alert("No data found for the selected criteria.", color="info"), None
 
         # Prepare for DataTable
         dt_columns = [{"name": i, "id": i} for i in result_df.columns]
@@ -997,25 +1106,56 @@ def handle_generate_data(
             sort_action="native",
         )
 
-        # Prepare for Download
-        # Create a filename (simplified version)
-        filename_parts = ["merged_data"]
-        if age_range: filename_parts.append(f"age{age_range[0]}-{age_range[1]}")
-        # Add more parts based on other filters if desired
-        filename = "_".join(filename_parts) + ".csv"
-
-        download_content = dcc.send_data_frame(result_df.to_csv, filename, index=False)
-
         return (
             html.Div([
                 dbc.Alert(f"Query successful. Displaying first {min(len(result_df), current_config.MAX_DISPLAY_ROWS)} of {len(result_df)} total rows{enwiden_info}.", color="success"),
-                preview_table
+                preview_table,
+                html.Hr(),
+                dbc.Button("Download CSV", id="download-csv-button", color="success", className="mt-2")
             ]),
-            download_content,
             result_df.to_dict('records') # Store full data for profiling page (consider size limits)
         )
 
     except Exception as e:
         logging.error(f"Error during data generation: {e}")
         logging.error(f"Query attempted: {data_query if 'data_query' in locals() else 'N/A'}")
-        return dbc.Alert(f"Error generating data: {str(e)}", color="danger"), None, None
+        return dbc.Alert(f"Error generating data: {str(e)}", color="danger"), None
+
+
+# Callback for CSV Download Button
+@callback(
+    Output('download-dataframe-csv', 'data'),
+    Input('download-csv-button', 'n_clicks'),
+    [State('merged-dataframe-store', 'data'),
+     State('age-slider', 'value')],
+    prevent_initial_call=True
+)
+def download_csv_data(n_clicks, stored_data, age_range):
+    if n_clicks is None or not stored_data:
+        return dash.no_update
+    
+    # Convert stored data back to DataFrame
+    df = pd.DataFrame(stored_data)
+    
+    # Create a filename
+    filename_parts = ["merged_data"]
+    if age_range: 
+        filename_parts.append(f"age{age_range[0]}-{age_range[1]}")
+    filename = "_".join(filename_parts) + ".csv"
+    
+    return dcc.send_data_frame(df.to_csv, filename, index=False)
+
+
+# Unified callback to save all filter states for persistence across page navigation
+@callback(
+    [Output('age-slider-state-store', 'data'),
+     Output('sex-dropdown-state-store', 'data'),
+     Output('table-multiselect-state-store', 'data'),
+     Output('enwiden-data-checkbox-state-store', 'data')],
+    [Input('age-slider', 'value'),
+     Input('sex-dropdown', 'value'),
+     Input('table-multiselect', 'value'),
+     Input('enwiden-data-checkbox', 'value')]
+)
+def save_all_filter_states(age_value, sex_value, table_value, enwiden_value):
+    return age_value, sex_value, table_value, enwiden_value
