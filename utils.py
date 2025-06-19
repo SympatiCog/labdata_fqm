@@ -467,6 +467,50 @@ def get_unique_session_values(data_dir: str, merge_keys: MergeKeys) -> Tuple[Lis
         return [], errors
     return sorted(list(unique_sessions)), errors
 
+def get_unique_column_values(data_dir: str, table_name: str, column_name: str, demo_table_name: str, demographics_file_name: str) -> Tuple[List[Any], Optional[str]]:
+    """
+    Extracts unique, sorted, non-null values from a specified column in a CSV file.
+    Args:
+        data_dir: The directory where data files are stored.
+        table_name: The name of the table (CSV file name without .csv extension).
+        column_name: The name of the column from which to extract unique values.
+        demo_table_name: The configured name for the demographics table.
+        demographics_file_name: The configured file name for the demographics CSV.
+    Returns:
+        A tuple containing a list of unique values and an optional error message string.
+    """
+    actual_file_name = demographics_file_name if table_name == demo_table_name else f"{table_name}.csv"
+    file_path = os.path.join(data_dir, actual_file_name)
+
+    if not os.path.exists(file_path):
+        return [], f"Error: File not found at {file_path}"
+
+    try:
+        df = pd.read_csv(file_path, usecols=[column_name])
+        # Drop NA values, get uniques, convert to list, and sort
+        # Convert to string to handle mixed types before sorting, then convert back if possible or keep as string
+        unique_values = sorted(list(df[column_name].dropna().astype(str).unique()))
+        # Attempt to convert back to numeric if all are numeric, otherwise keep as string
+        try:
+            # Check if all can be converted to float (includes integers)
+            numeric_values = [float(val) for val in unique_values]
+            # If original dtype was int-like (no decimals in string representation after float conversion)
+            if all(float(val) == int(float(val)) for val in unique_values):
+                 unique_values = sorted([int(val) for val in numeric_values]) # Convert to int
+            else:
+                 unique_values = sorted(numeric_values) # Keep as float
+        except ValueError:
+            # Not all values are numeric, keep as sorted strings
+            pass
+
+        return unique_values, None
+    except FileNotFoundError:
+        return [], f"Error: File not found at {file_path}"
+    except ValueError as ve: # Happens if column_name is not in the CSV
+        return [], f"Error: Column '{column_name}' not found in '{actual_file_name}' or file is empty. Details: {ve}"
+    except Exception as e:
+        return [], f"Error reading or processing file '{actual_file_name}': {e}"
+
 def validate_csv_structure(file_path: str, filename: str, merge_keys: MergeKeys) -> List[str]:
     """Validates basic CSV structure. Returns list of error messages."""
     errors = []
@@ -770,20 +814,30 @@ def generate_base_query_logic(
                     params[f'session_{len(params)}'] = session_val
 
     # 2. Behavioral Filters
+    # Convert params dict to a list for query execution
+    params_list: List[Any] = list(params.values())
+
     for i, b_filter in enumerate(behavioral_filters):
         if b_filter.get('table') and b_filter.get('column'):
-            # Use get_table_alias from utils.py, passing demo_table_name from config
             df_name = get_table_alias(b_filter['table'], demographics_table_name)
-            col_name = f'"{b_filter["column"]}"' # Quote column name
-            where_clauses.append(f"{df_name}.{col_name} BETWEEN ? AND ?")
-            params[f"b_filter_min_{i}"] = b_filter['min_val']
-            params[f"b_filter_max_{i}"] = b_filter['max_val']
+            col_name = f'"{b_filter["column"]}"'  # Quote column name
+
+            if b_filter.get('filter_type') == 'numeric' and b_filter.get('min_val') is not None and b_filter.get('max_val') is not None:
+                where_clauses.append(f"{df_name}.{col_name} BETWEEN ? AND ?")
+                params_list.append(b_filter['min_val'])
+                params_list.append(b_filter['max_val'])
+            elif b_filter.get('filter_type') == 'categorical' and b_filter.get('selected_values'):
+                selected_cat_values = b_filter['selected_values']
+                if selected_cat_values:  # Ensure list is not empty
+                    placeholders = ', '.join(['?' for _ in selected_cat_values])
+                    where_clauses.append(f"{df_name}.{col_name} IN ({placeholders})")
+                    params_list.extend(selected_cat_values)
 
     where_clause_str = ""
     if where_clauses:
         where_clause_str = "\nWHERE " + " AND ".join(where_clauses)
 
-    return f"{from_join_clause}{where_clause_str}", list(params.values())
+    return f"{from_join_clause}{where_clause_str}", params_list
 
 
 def generate_data_query(
