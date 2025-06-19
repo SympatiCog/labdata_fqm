@@ -104,7 +104,7 @@ layout = dbc.Container([
     [Input('merged-dataframe-store', 'data'), # From query page
      Input('upload-profiling-csv', 'contents')],
     [State('upload-profiling-csv', 'filename')],
-    prevent_initial_call=True # Important to prevent running on initial load before user action
+    prevent_initial_call=False # Allow initial call to check for existing data
 )
 def load_data_for_profiling(merged_data, upload_contents, upload_filename):
     ctx = dash.callback_context
@@ -157,7 +157,13 @@ def load_data_for_profiling(merged_data, upload_contents, upload_filename):
             logging.error(f"Error processing data from Query Page on refresh: {str(e)}")
             # Fall through to no data state
 
-    return None, "No data available for profiling. Load from Query page or upload a CSV."
+    return None, html.Div([
+        "No data available for profiling.",
+        html.Br(),
+        "• Generate data on the Query page and it will automatically appear here, or",
+        html.Br(),
+        "• Upload a CSV file above to profile it directly"
+    ])
 
 
 # Callback to Control Sample Slider Visibility and Disabled State
@@ -212,26 +218,34 @@ def generate_and_display_profiling_report(n_clicks, df_data, report_type_value, 
 
         logging.info(f"Generating profiling report. Original df size: {len(df)} rows.")
 
-        profile_config = {}
-        if report_type_value == 'minimal':
-            profile_config['minimal'] = True
-        elif report_type_value == 'explorative':
-            profile_config['explorative'] = True
-        # 'full' is default, no specific config needed unless further customization
-
         df_to_profile = df
         if use_sample and len(df) > sample_size:
             logging.info(f"Using sample of {sample_size} rows for profiling.")
             df_to_profile = df.sample(n=sample_size, random_state=42) # Added random_state for reproducibility
 
-        logging.info(f"Profiling dataframe with {len(df_to_profile)} rows. Config: {profile_config}")
+        logging.info(f"Profiling dataframe with {len(df_to_profile)} rows. Report type: {report_type_value}")
 
-        profile = ProfileReport(
-            df_to_profile,
-            title="Data Profiling Report",
-            config_override=profile_config if profile_config else None, # Pass None if empty
-            lazy=False # Compute all parts of the report
-        )
+        # Create ProfileReport with appropriate parameters based on report type
+        if report_type_value == 'minimal':
+            profile = ProfileReport(
+                df_to_profile,
+                title="Data Profiling Report (Minimal)",
+                minimal=True,
+                lazy=False
+            )
+        elif report_type_value == 'explorative':
+            profile = ProfileReport(
+                df_to_profile,
+                title="Data Profiling Report (Explorative)",
+                explorative=True,
+                lazy=False
+            )
+        else:  # 'full' is default
+            profile = ProfileReport(
+                df_to_profile,
+                title="Data Profiling Report",
+                lazy=False
+            )
 
         report_html = profile.to_html()
         # Attempt to get JSON data, handle if not available for certain reports/versions

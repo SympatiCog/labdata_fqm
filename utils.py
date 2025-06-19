@@ -209,6 +209,9 @@ class Config:
             'composite_id_column': self.COMPOSITE_ID_COLUMN,
             'default_age_min': self.DEFAULT_AGE_SELECTION[0],
             'default_age_max': self.DEFAULT_AGE_SELECTION[1],
+            'max_display_rows': self.MAX_DISPLAY_ROWS,
+            'default_sex_selection': self.DEFAULT_SEX_SELECTION,
+            'session_options': self.SESSION_OPTIONS,
             'sex_mapping': self.SEX_MAPPING
         }
         try:
@@ -233,6 +236,9 @@ class Config:
             default_age_min = config_data.get('default_age_min', self.DEFAULT_AGE_SELECTION[0])
             default_age_max = config_data.get('default_age_max', self.DEFAULT_AGE_SELECTION[1])
             self.DEFAULT_AGE_SELECTION = (default_age_min, default_age_max)
+            self.MAX_DISPLAY_ROWS = config_data.get('max_display_rows', self.MAX_DISPLAY_ROWS)
+            self.DEFAULT_SEX_SELECTION = config_data.get('default_sex_selection', self.DEFAULT_SEX_SELECTION)
+            self.SESSION_OPTIONS = config_data.get('session_options', self.SESSION_OPTIONS)
             self.SEX_MAPPING = config_data.get('sex_mapping', self.SEX_MAPPING)
 
             logging.info(f"Configuration loaded from {self.CONFIG_FILE_PATH}")
@@ -740,24 +746,28 @@ def generate_base_query_logic(
     # Session Filters
     if demographic_filters.get('sessions') and merge_keys.session_id:
         session_conditions = []
-        session_placeholders = ', '.join(['?' for _ in demographic_filters['sessions']])
+        session_values = demographic_filters['sessions']
+        session_placeholders = ', '.join(['?' for _ in session_values])
+        
         # Iterate through tables that are known to potentially have session info
         # This should ideally be based on metadata (e.g., if table has session_id column)
         for table_alias_for_session in all_join_tables:
             # We need to know if this table *has* the session_id column.
             # This is a simplification; ideally, we'd check column_dtypes or similar metadata.
-            # For now, assume any non-demographics table *might* have it if it's longitudinal.
-            if table_alias_for_session != 'demo': # Demographics table might not have session_id in the same way
-                 session_conditions.append(f"{table_alias_for_session}.\"{merge_keys.session_id}\" IN ({session_placeholders})")
+            # For now, assume any table *might* have it if it's longitudinal.
+            
+            # Use proper table alias: 'demo' for demographics table, table name for others
+            table_alias = 'demo' if table_alias_for_session == demographics_table_name else table_alias_for_session
+            session_conditions.append(f"{table_alias}.\"{merge_keys.session_id}\" IN ({session_placeholders})")
 
         if session_conditions:
             # This creates a complex OR condition if multiple tables have session_id.
             # It might be intended that session filter applies to *any* table having that session.
             where_clauses.append(f"({' OR '.join(session_conditions)})")
-            # Parameters for sessions need to be added for each condition if OR logic is complex.
-            # Simplified: assume one set of session parameters is enough if the column name is consistent.
-            for session_val in demographic_filters['sessions']:
-                 params[f'session_{len(params)}'] = session_val
+            # Add session parameters for each condition - each condition needs its own set of parameters
+            for _ in session_conditions:
+                for session_val in session_values:
+                    params[f'session_{len(params)}'] = session_val
 
     # 2. Behavioral Filters
     for i, b_filter in enumerate(behavioral_filters):
